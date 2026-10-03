@@ -16,9 +16,12 @@
 // matrix bus when nothing changed since the last call.
 void renderLinescore(const LinescoreSnapshot& linescore);
 
-// Waiting mode: count LEDs dark and the score matrices released to the
-// idle clock (updateMax7219Clock in sport::tick repaints them).
+// Waiting mode: all ball LEDs indicate a connected, idle board and the score
+// matrices are released to the idle clock (updateMax7219Clock repaints them).
 void renderWaiting(const int preferredTeamIds[3]);
+
+// Offline mode: light both out LEDs while the board has no network connection.
+void renderNetworkDisconnected();
 
 // Writes the current matrix + discrete LED state to Serial (DBG builds).
 void logLiveDisplayState(const LinescoreSnapshot& linescore, int gamePk);

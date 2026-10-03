@@ -13,6 +13,7 @@
 #include <time.h>
 
 #include "config.h"
+#include "common/ui/display_test.h"
 #include "common/ui/ota_indicator.h"
 #include "ota_update.h"
 
@@ -196,6 +197,21 @@ void startPortalInfrastructure() {
   }
 }
 
+bool ensureSetupAccessPoint() {
+  if (!apUp) {
+    if (!WiFi.softAP(apSsid.c_str(), NETWORK_AP_PASSWORD)) {
+      Serial.println("[NET] ERROR: failed to start setup access point");
+      return false;
+    }
+    apUp = true;
+    Serial.printf("[NET] AP ready: ssid=%s ip=%s\n",
+                  apSsid.c_str(),
+                  WiFi.softAPIP().toString().c_str());
+  }
+  startPortalInfrastructure();
+  return true;
+}
+
 void stopPortalInfrastructure() {
   if (dnsRunning) {
     dnsServer.stop();
@@ -266,17 +282,11 @@ void enterProvisioning() {
   state = PROVISIONING;
   stateStartedAt = millis();
   WiFi.disconnect();
-  if (!apUp) {
-    WiFi.softAP(apSsid.c_str(), NETWORK_AP_PASSWORD);
-    apUp = true;
-    startPortalInfrastructure();
+  if (ensureSetupAccessPoint()) {
+    requestSetupRedraw(SETUP_AP_INSTRUCTIONS, WiFi.softAPIP());
   }
-  requestSetupRedraw(SETUP_AP_INSTRUCTIONS, WiFi.softAPIP());
   Serial.println("[NET] Provisioning: waiting for portal credentials");
   logWiFiStatus(true);
-  Serial.printf("[NET] AP ready: ssid=%s ip=%s\n",
-                apSsid.c_str(),
-                WiFi.softAPIP().toString().c_str());
 }
 
 void enterConnecting() {
@@ -284,6 +294,7 @@ void enterConnecting() {
   stateStartedAt = millis();
   lastProbeAt = 0;
   lastReconnectAt = millis();
+  ensureSetupAccessPoint();
   Serial.printf("[NET] Connecting to SSID '%s'\n", savedSsid.c_str());
   requestSetupRedraw(SETUP_CONNECTING, WiFi.softAPIP());
 }
@@ -299,6 +310,7 @@ void tryReconnectWithSavedNetwork() {
   // killed the schedule/news fetches. The scoreboard is mains-powered, so
   // the extra ~40 mA is irrelevant.
   WiFi.setSleep(false);
+  ensureSetupAccessPoint();
   WiFi.begin(savedSsid.c_str(), savedPassword.c_str());
   enterConnecting();
 }
@@ -457,8 +469,11 @@ hr{border:0;border-top:1px solid #1c4587;margin:20px 0}
   if (clockDisplayEnabled) page += " checked";
   page += R"html(>Display current time on score boards when no game is live</label>
 <button type="submit">Save & Connect Scoreboard</button></form>
+<hr><h3>Display Test</h3>
+<p class="hint">Test each count LED and every pixel on both score matrices.</p>
+<p><a style="color:#f5c400" href="/display-test">Open display test page</a></p>
 <hr><h3>Firmware Update</h3>
-<p class="hint">Installed: )html" + String(FIRMWARE_VERSION) + R"html(. Automatic checks run at boot and every 10 minutes.</p>
+<p class="hint">Installed: )html" + String(FIRMWARE_VERSION) + R"html(. Automatic checks run at boot and periodically.</p>
 <button type="button" style="margin-top:8px" onclick="otaCheck()">Check for Update Now</button>
 <p class="hint" id="otaStatus">&nbsp;</p>
 <p class="hint">Latest binary (for manual updates):<br>
@@ -468,7 +483,7 @@ hr{border:0;border-top:1px solid #1c4587;margin:20px 0}
 var otaWaiting=false;
 function otaCheck(){otaWaiting=true;document.getElementById('otaStatus').textContent='Checking...';fetch('/ota/check',{method:'POST'})}
 setInterval(function(){fetch('/ota/status').then(function(r){return r.json()}).then(function(s){var e=document.getElementById('otaStatus');
-if(s.stage==='DOWNLOADING'){otaWaiting=false;e.textContent='Downloading update '+s.progress+'% - watch the score matrices; do not power off.'}
+if(s.stage==='DOWNLOADING'){otaWaiting=false;e.textContent='Downloading update '+s.progress+'% - watch the Home matrix and count LEDs; do not power off.'}
 else if(s.stage==='REBOOTING'){otaWaiting=false;e.textContent='Update installed - rebooting...'}
 else if(s.stage==='FAILED'){otaWaiting=false;e.textContent='Update failed (network may block GitHub) - use the manual upload below.'}
 else if(otaWaiting&&s.checked&&!s.ok){otaWaiting=false;e.textContent='Check failed - this network may block GitHub. Use the manual upload below.'}
@@ -624,6 +639,128 @@ void serveOtaStatus() {
   server.send(200, "application/json", body);
 }
 
+void sendDisplayTestState() {
+  DisplayTestState test = getRequestedDisplayTestState();
+  char body[112];
+  snprintf(body, sizeof(body),
+           "{\"active\":%s,\"leds\":%u,\"away\":\"%016llx\","
+           "\"home\":\"%016llx\"}",
+           test.active ? "true" : "false", test.ledMask,
+           (unsigned long long)test.awayPixels,
+           (unsigned long long)test.homePixels);
+  server.send(200, "application/json", body);
+}
+
+bool parseDisplayTestBoolean(const char* name, bool& value) {
+  if (!server.hasArg(name)) return false;
+  String argument = server.arg(name);
+  if (argument == "1") {
+    value = true;
+    return true;
+  }
+  if (argument == "0") {
+    value = false;
+    return true;
+  }
+  return false;
+}
+
+bool parseDisplayTestCoordinate(const char* name, uint8_t& value) {
+  if (!server.hasArg(name)) return false;
+  String argument = server.arg(name);
+  if (argument.isEmpty()) return false;
+  char* end = nullptr;
+  long parsed = strtol(argument.c_str(), &end, 10);
+  if (end == argument.c_str() || *end != '\0' || parsed < 0 || parsed > 7) {
+    return false;
+  }
+  value = static_cast<uint8_t>(parsed);
+  return true;
+}
+
+void serveDisplayTestState() {
+  markPortalActivity();
+  sendDisplayTestState();
+}
+
+void serveDisplayTestPage() {
+  markPortalActivity();
+  server.send(200, "text/html", R"html(<!doctype html><html><head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Display Test</title><style>
+body{margin:0;background:#061b46;color:#fff;font:16px system-ui,sans-serif}
+main{max-width:720px;margin:4vh auto;padding:22px;background:#0b2b62;border:2px solid #dfe9ff;border-radius:8px}
+h1{margin-top:0}h2{font-size:19px}.hint{color:#c5d3ee;line-height:1.4}
+a{color:#f5c400}.leds{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px}
+button{border:1px solid #8299c2;border-radius:5px;padding:10px;background:#102d5a;color:#fff;font:inherit;cursor:pointer}
+button.on{background:#f5c400;color:#000;border-color:#f5c400}
+.matrices{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:18px}
+.matrix{display:grid;grid-template-columns:repeat(8,1fr);gap:3px;max-width:280px}
+.pixel{aspect-ratio:1;padding:0;min-width:18px;min-height:18px;background:#061b46}
+.pixel.on{background:#f5c400}
+.stop{margin:20px 0;background:#9b2633;border-color:#d66}
+</style></head><body><main><h1>Display Test</h1>
+<p class="hint">Tap a control to toggle one count LED or one matrix pixel. The test takes over the board until you stop it.</p>
+<h2>Count LEDs</h2><div class="leds" id="leds"></div>
+<h2>8×8 Matrices</h2><div class="matrices">
+<section><h3>Away matrix (position 1)</h3><div class="matrix" id="away"></div></section>
+<section><h3>Home / inning matrix (position 2)</h3><div class="matrix" id="home"></div></section>
+</div><p id="message" class="hint"></p>
+<button class="stop" onclick="stopTest()">Stop test and restore scoreboard</button>
+<p><a href="/">Back to board settings</a></p></main>
+<script>
+var state={active:false,leds:0,away:'0000000000000000',home:'0000000000000000'};
+var ledNames=['Ball 1','Ball 2','Ball 3','Strike 1','Strike 2','Out 1','Out 2'];
+function pixelOn(hex,index){var shift=index%4;var digit=15-Math.floor(index/4);return ((parseInt(hex.charAt(digit),16)>>shift)&1)!==0}
+function updateHex(hex,index,on){var digits=hex.split(''),digit=15-Math.floor(index/4),bit=1<<(index%4),value=parseInt(digits[digit],16);digits[digit]=(on?(value|bit):(value&~bit)).toString(16);return digits.join('')}
+function post(path,data){return fetch(path,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(data)}).then(function(r){if(!r.ok)throw new Error('Request failed');return r.json()}).then(function(s){state=s;draw()}).catch(function(e){document.getElementById('message').textContent=e.message})}
+function draw(){var leds=document.getElementById('leds');leds.textContent='';
+ledNames.forEach(function(name,index){var b=document.createElement('button'),on=(state.leds&(1<<index))!==0;b.textContent=name+(on?' — ON':' — OFF');b.className=on?'on':'';b.onclick=function(){post('/display-test/led',{index:index,on:on?'0':'1'})};leds.appendChild(b)});
+['away','home'].forEach(function(which){var grid=document.getElementById(which);grid.textContent='';for(var y=0;y<8;y++)for(var x=0;x<8;x++){var index=y*8+x,on=pixelOn(state[which],index),b=document.createElement('button');b.className='pixel'+(on?' on':'');b.setAttribute('aria-label',which+' pixel '+(x+1)+','+(y+1));b.onclick=(function(matrix,px,py,enabled){return function(){var key=matrix;state[key]=updateHex(state[key],py*8+px,enabled);post('/display-test/pixel',{matrix:matrix,x:px,y:py,on:enabled?'0':'1'})}})(which,x,y,on);grid.appendChild(b)}});
+document.getElementById('message').textContent=state.active?'Display test active.':'';
+}
+function stopTest(){fetch('/display-test/stop',{method:'POST'}).then(function(){location.href='/'})}
+fetch('/display-test/state').then(function(r){return r.json()}).then(function(s){state=s;draw()}).catch(function(){document.getElementById('message').textContent='Unable to read display state.'});
+</script></body></html>)html");
+}
+
+void handleDisplayTestLed() {
+  markPortalActivity();
+  uint8_t index = 0;
+  bool enabled = false;
+  if (!parseDisplayTestCoordinate("index", index) ||
+      !parseDisplayTestBoolean("on", enabled) ||
+      !setDisplayTestLed(index, enabled)) {
+    server.send(400, "text/plain", "Expected LED index 0..6 and on=0|1");
+    return;
+  }
+  sendDisplayTestState();
+}
+
+void handleDisplayTestPixel() {
+  markPortalActivity();
+  uint8_t x = 0;
+  uint8_t y = 0;
+  bool enabled = false;
+  String matrix = server.arg("matrix");
+  if (!parseDisplayTestCoordinate("x", x) ||
+      !parseDisplayTestCoordinate("y", y) ||
+      !parseDisplayTestBoolean("on", enabled) ||
+      (matrix != "away" && matrix != "home")) {
+    server.send(400, "text/plain",
+                "Expected matrix=away|home, x/y=0..7 and on=0|1");
+    return;
+  }
+  setDisplayTestPixel(matrix == "home", x, y, enabled);
+  sendDisplayTestState();
+}
+
+void handleDisplayTestStop() {
+  markPortalActivity();
+  stopDisplayTest();
+  sendDisplayTestState();
+}
+
 void serveUpdatePage() {
   markPortalActivity();
   server.send(200, "text/html", R"html(<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -674,6 +811,11 @@ void handleUpdateResult() {
 
 void registerPortalRoutes() {
   server.on("/", HTTP_GET, servePortal);
+  server.on("/display-test", HTTP_GET, serveDisplayTestPage);
+  server.on("/display-test/state", HTTP_GET, serveDisplayTestState);
+  server.on("/display-test/led", HTTP_POST, handleDisplayTestLed);
+  server.on("/display-test/pixel", HTTP_POST, handleDisplayTestPixel);
+  server.on("/display-test/stop", HTTP_POST, handleDisplayTestStop);
   server.on("/status", HTTP_GET, serveStatus);
   server.on("/config", HTTP_GET, serveConfig);
   server.on("/save", HTTP_POST, saveNetwork);
@@ -727,7 +869,7 @@ void runNetworkStateMachine() {
 } // namespace
 
 bool isOnline() {
-  return state == ONLINE;
+  return state == ONLINE && WiFi.status() == WL_CONNECTED;
 }
 
 bool isProvisioning() {
@@ -797,12 +939,9 @@ void startNetworkServices(const NetworkBranding& branding,
   }
   WiFi.setHostname(deviceHostname.c_str());
   Serial.printf("[NET] Device hostname: %s\n", deviceHostname.c_str());
-  // The web server starts now and serves over whichever interface is up,
-  // but the setup AP only comes up in enterProvisioning() — i.e. when
-  // there's genuinely no saved network or connecting failed. Starting it
-  // eagerly at every boot broadcast the setup AP for the whole connect
-  // window, letting phones that remember it auto-join and lose their
-  // route the moment the device went online (setup page then "hung").
+  // Keep the setup AP and captive portal available while trying saved Wi-Fi
+  // credentials. It is stopped by enterOnline() once the station is connected,
+  // so phones can still configure a board that has not joined a network yet.
   server.begin();
   setupScreenVisible = true;
 
@@ -810,6 +949,9 @@ void startNetworkServices(const NetworkBranding& branding,
   if (savedSsid.isEmpty()) {
     enterProvisioning();
   } else {
+    if (ensureSetupAccessPoint()) {
+      printSetupInstructions(WiFi.softAPIP().toString(), false);
+    }
     WiFi.begin(savedSsid.c_str(), savedPassword.c_str());
     enterConnecting();
   }

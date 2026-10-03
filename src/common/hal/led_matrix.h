@@ -19,10 +19,18 @@ void updateMax7219Clock(bool enabled);
 // minute hasn't changed (e.g. after leaving a live game).
 void invalidateMax7219Clock();
 
+// Temporarily draws individual pixels on both matrices. Each mask uses bits
+// 0..63 in row-major order as viewed from the front; the driver restores the
+// previous matrix images when the override is disabled.
+void setMax7219PixelsOverride(bool enabled, uint64_t awayPixels,
+                              uint64_t homePixels);
+
+// Temporarily shows "UD" on the home matrix (device 1 / position 2),
+// preserving the other matrix and restoring both previous images on exit.
+void setMax7219UpdateNotice(bool enabled);
+
 // Lights `litColumns` of the 16 matrix columns as a solid bar across both
-// modules (0 = dark, 16 = all on). Used for the headless OTA progress
-// indicator; owns the display until the next setMax7219Scores /
-// updateMax7219Clock call repaints it.
+// modules (0 = dark, 16 = all on).
 void setMax7219Bar(int litColumns);
 
 // TEST ONLY: shows "H" on the home matrix and "A" on the away matrix at boot.

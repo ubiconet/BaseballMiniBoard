@@ -5,8 +5,8 @@
 // Firmware self-update against the releases/manifest.json in the GitHub
 // repo (written by `pio run -t deploy`). Runs entirely on the core-0 data
 // task: fetch manifest, compare version with FIRMWARE_VERSION, and when
-// they differ download + flash the new binary while the score matrices
-// show the update progress bar (see handleOtaIndicator()).
+// they differ download + flash the new binary while the Home matrix shows
+// "UD" and the count LEDs flash (see handleOtaIndicator()).
 // onlineForMs = milliseconds since the network last came online (0 while
 // offline); the first check fires shortly after association.
 void serviceOtaUpdates(uint32_t onlineForMs);
@@ -29,4 +29,4 @@ bool otaBootGateReached(uint32_t onlineForMs);
 void requestOtaCheckNow();
 bool otaCheckRequested();      // true while a request is pending
 bool otaEverChecked();         // at least one check completed
-bool otaLastCheckOk();         // last check reached and parsed the manifest
+bool otaLastCheckOk();         // last manifest check/update download had no error

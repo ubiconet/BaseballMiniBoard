@@ -17,6 +17,7 @@
 #include "config.h"
 #include "common/app/sport_api.h"
 #include "common/comms/network_service.h"
+#include "common/ui/display_test.h"
 #include "common/ui/ota_indicator.h"
 
 void setup() {
@@ -50,11 +51,13 @@ void setup() {
 }
 
 void loop() {
-  // An in-progress firmware update owns the LED hardware whenever it runs
-  // (progress bar across the score matrices — "do not turn off"); the
-  // sport UI owns every frame after that. Network/update/game-data work
-  // runs on core 0 throughout.
+  // OTA has priority over the interactive display test; both keep hardware
+  // writes on this render core rather than the network task.
   if (handleOtaIndicator()) {
+    return;
+  }
+
+  if (handleDisplayTest()) {
     return;
   }
 

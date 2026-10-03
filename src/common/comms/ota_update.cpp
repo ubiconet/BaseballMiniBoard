@@ -146,9 +146,12 @@ void serviceOtaUpdates(uint32_t onlineForMs) {
   // longer satisfy (the 2.0.x Updater reports that failed malloc as
   // "No Error"). No flash is touched until the first write.
   if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
-    DBG_PRINTF("[OTA] Update.begin failed: %s (freeHeap=%u maxAlloc=%u)\n",
-               Update.errorString(), ESP.getFreeHeap(),
-               ESP.getMaxAllocHeap());
+    Serial.printf("[OTA] Update.begin failed: %s (freeHeap=%u maxAlloc=%u)\n",
+                  Update.errorString(), ESP.getFreeHeap(),
+                  ESP.getMaxAllocHeap());
+    sLastCheckOk = false;
+    sBootAttempts++;
+    sCheckedOnce = (sBootAttempts >= OTA_BOOT_MAX_ATTEMPTS);
     return;
   }
 
@@ -165,10 +168,15 @@ void serviceOtaUpdates(uint32_t onlineForMs) {
   http.begin(client, OTA_MANIFEST_URL);
   http.setTimeout(10000);
   int httpCode = http.GET();
+  Serial.printf("[OTA] Manifest check HTTP %d\n", httpCode);
   DBG_PRINTF("[OTA] manifest -> HTTP %d\n", httpCode);
   uint8_t manifestBuf[512];
-  if (httpCode != HTTP_CODE_OK ||
-      readExactBody(http, manifestBuf, sizeof(manifestBuf)) == 0) {
+  size_t manifestLength = httpCode == HTTP_CODE_OK
+      ? readExactBody(http, manifestBuf, sizeof(manifestBuf))
+      : 0;
+  if (httpCode != HTTP_CODE_OK || manifestLength == 0) {
+    Serial.printf("[OTA] Manifest request failed (HTTP %d or empty body)\n",
+                  httpCode);
     http.end();
     Update.abort();
     sLastCheckOk = false;
@@ -186,9 +194,10 @@ void serviceOtaUpdates(uint32_t onlineForMs) {
   manifestBuf[sizeof(manifestBuf) - 1] = '\0';
   JsonDocument doc;
   DeserializationError error =
-      deserializeJson(doc, (const char*)manifestBuf);
+      deserializeJson(doc, (const char*)manifestBuf, manifestLength);
   if (error) {
     DBG_PRINTF("[OTA] manifest parse error: %s\n", error.c_str());
+    Serial.printf("[OTA] Manifest parse failed: %s\n", error.c_str());
     http.end();
     Update.abort();
     sLastCheckOk = false;
@@ -209,6 +218,7 @@ void serviceOtaUpdates(uint32_t onlineForMs) {
   }
   sLastCheckOk = manifestVersion[0] != '\0' && url.length() > 0;
   if (!sLastCheckOk) {
+    Serial.println("[OTA] Manifest is missing a version or binary URL");
     http.end();
     Update.abort();
     sCheckedOnce = true;  // fetched-but-incomplete: don't spin on it
@@ -216,12 +226,16 @@ void serviceOtaUpdates(uint32_t onlineForMs) {
   }
 
   if (!manifestIsNewer(manifestVersion)) {
+    Serial.printf("[OTA] Firmware is current (%s; latest %s)\n",
+                  FIRMWARE_VERSION, manifestVersion);
     DBG_PRINTF("[OTA] up to date (%s, manifest %s)\n", FIRMWARE_VERSION,
                manifestVersion);
     http.end();
     Update.abort();
     return;
   }
+  Serial.printf("[OTA] Update available: %s -> %s\n",
+                FIRMWARE_VERSION, manifestVersion);
   DBG_PRINTF("[OTA] update available: %s -> %s\n", FIRMWARE_VERSION,
              manifestVersion);
   setOtaTargetVersion(manifestVersion);
@@ -239,10 +253,14 @@ void serviceOtaUpdates(uint32_t onlineForMs) {
   http.begin(client, url);
   httpCode = http.GET();
   int total = http.getSize();  // -1 when chunked
+  Serial.printf("[OTA] Firmware download HTTP %d (%d bytes)\n",
+                httpCode, total);
   DBG_PRINTF("[OTA] firmware -> HTTP %d (%d bytes)\n", httpCode, total);
   if (httpCode != HTTP_CODE_OK) {
+    Serial.println("[OTA] Firmware download request failed");
     http.end();
     Update.abort();
+    sLastCheckOk = false;
     return;
   }
 
@@ -258,6 +276,8 @@ void serviceOtaUpdates(uint32_t onlineForMs) {
   // current firmware partition is untouched — Update only swaps on a fully
   // written + verified image.
   Update.abort();
+  sLastCheckOk = false;
+  Serial.printf("[OTA] Firmware update failed: %s\n", Update.errorString());
   publishOtaStage(OtaStage::FAILED, 0);
   uint32_t failUntil = millis() + 5000;
   while (millis() < failUntil) delay(100);

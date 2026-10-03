@@ -27,6 +27,8 @@ ScoreboardState scoreboardState = ScoreboardState::WAITING;
 uint32_t sLastLinescoreGen = 0;
 uint32_t sLastScheduleGen  = 0;
 uint32_t sLastScheduleRenderAt = 0;
+bool sNetworkStateRendered = false;
+bool sLastNetworkOnline = false;
 
 // The data task can't decide on its own which game the user wants to follow
 // (that depends on the preferred-team list, which lives in NVS on core 1).
@@ -95,6 +97,13 @@ void startDataTask() {
 }
 
 void tick(const SportTickContext& ctx) {
+  bool networkStateChanged = !sNetworkStateRendered ||
+                             ctx.isOnline != sLastNetworkOnline;
+  bool justCameOnline = ctx.isOnline && networkStateChanged;
+  bool justWentOffline = !ctx.isOnline && networkStateChanged;
+  sNetworkStateRendered = true;
+  sLastNetworkOnline = ctx.isOnline;
+
   if (consumeScoreboardRelease()) {
     int preferredTeams[3];
     getPreferredTeamIds(preferredTeams);
@@ -105,6 +114,9 @@ void tick(const SportTickContext& ctx) {
   }
 
   if (!ctx.isOnline) {
+    if (justWentOffline) {
+      renderNetworkDisconnected();
+    }
     return;
   }
 
@@ -143,7 +155,7 @@ void tick(const SportTickContext& ctx) {
   // Render based on state.
   if (scoreboardState == ScoreboardState::WAITING) {
     // First entry to WAITING (or schedule refresh): re-arm the idle clock.
-    if (sLastScheduleRenderAt == 0 || newSchedule) {
+    if (justCameOnline || sLastScheduleRenderAt == 0 || newSchedule) {
       sLastScheduleRenderAt = now;
       renderWaiting(preferredTeams);
       logWaitingDisplayState(preferredTeams);

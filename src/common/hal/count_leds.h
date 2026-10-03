@@ -17,5 +17,10 @@ void initCountLeds(const int pins[7]);
 // clamped by construction (>= comparisons), extra lamps stay dark.
 void setCountLeds(uint8_t countA, uint8_t countB, uint8_t countC);
 
+// Temporarily override individual LEDs without losing the most recently
+// requested counter values; disabling the override restores that display.
+// Bits 0..6 follow initCountLeds() pin order.
+void setCountLedsOverride(bool enabled, uint8_t ledMask);
+
 // TEST ONLY: cycles each LED on for 0.5 s, one at a time, then clears.
 void runCountLedTestLoop();

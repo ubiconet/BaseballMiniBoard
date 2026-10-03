@@ -58,13 +58,17 @@ void renderLinescore(const LinescoreSnapshot& ls) {
 
 void renderWaiting(const int preferredTeamIds[3]) {
   (void)preferredTeamIds;
-  setCountLeds(0, 0, 0);
+  setCountLeds(3, 0, 0);
   // Release the matrices to the idle clock and force its next pass to
   // repaint, so stale game scores can't linger through waiting mode.
   invalidateMax7219Clock();
   // The next live frame must repaint even when its first snapshot happens
   // to equal the last one rendered before the game ended.
   gHasRendered = false;
+}
+
+void renderNetworkDisconnected() {
+  setCountLeds(0, 0, 2);
 }
 
 void logLiveDisplayState(const LinescoreSnapshot& ls, int gamePk) {

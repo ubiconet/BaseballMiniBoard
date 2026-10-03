@@ -4,9 +4,8 @@
 
 // Firmware self-update indicator (driven by the OTA updater on core 0,
 // drawn by handleOtaIndicator() on the render loop). This build has no
-// TFT: the update state shows as a progress bar across the two MAX7219
-// matrices (16 columns = 100%). Only POD + a small string cross the
-// boundary, same pattern as the feed snapshots.
+// TFT: an update shows "UD" on the home matrix while all seven count LEDs
+// flash together. Only POD + a small string cross the task boundary.
 
 enum class OtaStage : uint8_t {
   NONE = 0,
@@ -19,7 +18,7 @@ void publishOtaStage(OtaStage stage, int progressPct);  // core-0 updater
 OtaStage getOtaStage();
 int getOtaProgress();
 void setOtaTargetVersion(const char* version);
-// Paints the update state on the score matrices while an update is in
+// Paints the update state and flashes the count LEDs while an update is in
 // progress. Returns true when the indicator owns this frame so the caller
 // (loop()) should skip normal rendering.
 bool handleOtaIndicator();
