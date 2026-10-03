@@ -50,7 +50,7 @@ const uint8_t FONT_5X7[10][7] = {
   {0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100}  // 9
 };
 
-// 5x7 font letters used only for the boot-time matrix test (H = home, A = away)
+// 5x7 font letters used only for the boot-time matrix test.
 const uint8_t LETTER_H_5X7[7] = {
   0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001
 };
@@ -64,12 +64,15 @@ const uint8_t MATRIX_GAME_INTENSITY = 0x05;
 const uint8_t MATRIX_CLOCK_INTENSITY = 0x01;
 uint8_t matrixIntensity = MATRIX_GAME_INTENSITY;
 uint8_t displayedAwayRows[8] = {0};
+uint8_t displayedCenterRows[8] = {0};
 uint8_t displayedHomeRows[8] = {0};
 uint8_t savedAwayRows[8] = {0};
+uint8_t savedCenterRows[8] = {0};
 uint8_t savedHomeRows[8] = {0};
 bool hasDisplayedRows = false;
 bool matrixOverrideActive = false;
 uint64_t matrixOverrideAwayPixels = 0;
+uint64_t matrixOverrideCenterPixels = 0;
 uint64_t matrixOverrideHomePixels = 0;
 uint8_t savedMatrixIntensity = MATRIX_GAME_INTENSITY;
 
@@ -81,9 +84,14 @@ void max7219ShiftByte(uint8_t data) {
   }
 }
 
-// Send (reg, data) command pair to 2 cascaded MAX7219 devices: dev1 (Home) then dev0 (Away)
-void max7219Send(uint8_t reg1, uint8_t data1, uint8_t reg0, uint8_t data0) {
+// Arguments use device order left, center, right; cascaded modules are shifted
+// in reverse device order so the final pair reaches device 0.
+void max7219Send(uint8_t reg0, uint8_t data0,
+                 uint8_t reg1, uint8_t data1,
+                 uint8_t reg2, uint8_t data2) {
   digitalWrite(CS_PIN, LOW);
+  max7219ShiftByte(reg2);
+  max7219ShiftByte(data2);
   max7219ShiftByte(reg1);
   max7219ShiftByte(data1);
   max7219ShiftByte(reg0);
@@ -92,7 +100,7 @@ void max7219Send(uint8_t reg1, uint8_t data1, uint8_t reg0, uint8_t data0) {
 }
 
 void max7219SendAll(uint8_t reg, uint8_t data) {
-  max7219Send(reg, data, reg, data);
+  max7219Send(reg, data, reg, data, reg, data);
 }
 
 void setMatrixIntensity(uint8_t intensity) {
@@ -165,17 +173,27 @@ void scoreToMatrixRows(int score, uint8_t rows[8], bool compactSingleDigit = fal
   }
 }
 
-void writeMatrixRows(uint8_t awayRows[8], uint8_t homeRows[8]) {
+void writeMatrixRows(const uint8_t awayRows[8],
+                     const uint8_t centerRows[8],
+                     const uint8_t homeRows[8]) {
   if (!matrixOverrideActive) {
     memcpy(displayedAwayRows, awayRows, sizeof(displayedAwayRows));
+    memcpy(displayedCenterRows, centerRows, sizeof(displayedCenterRows));
     memcpy(displayedHomeRows, homeRows, sizeof(displayedHomeRows));
     hasDisplayedRows = true;
   }
-  rotateMatrix180(homeRows);
-  rotateMatrix90Ccw(awayRows);
+  uint8_t awayOutput[8];
+  uint8_t centerOutput[8];
+  uint8_t homeOutput[8];
+  memcpy(awayOutput, awayRows, sizeof(awayOutput));
+  memcpy(centerOutput, centerRows, sizeof(centerOutput));
+  memcpy(homeOutput, homeRows, sizeof(homeOutput));
+  rotateMatrix90Ccw(awayOutput);
+  rotateMatrix180(homeOutput);
   for (uint8_t row = 0; row < 8; row++) {
     uint8_t reg = MAX7219_REG_DIGIT0 + row;
-    max7219Send(reg, homeRows[row], reg, awayRows[row]);
+    max7219Send(reg, awayOutput[row], reg, centerOutput[row],
+                reg, homeOutput[row]);
   }
 }
 } // namespace
@@ -208,13 +226,20 @@ void setMax7219Scores(int awayScore, int homeScore) {
 
   scoreToMatrixRows(awayScore, awayRows);
   scoreToMatrixRows(homeScore, homeRows);
-  writeMatrixRows(awayRows, homeRows);
+  writeMatrixRows(awayRows, displayedCenterRows, homeRows);
+}
+
+void setMax7219CenterRows(const uint8_t rows[8]) {
+  setMatrixIntensity(MATRIX_GAME_INTENSITY);
+  writeMatrixRows(displayedAwayRows, rows, displayedHomeRows);
 }
 
 void updateMax7219Clock(bool enabled) {
   if (!enabled) {
     if (clockShown) {
-      setMax7219Scores(MAX7219_SCORE_BLANK, MAX7219_SCORE_BLANK);
+      uint8_t blankRows[8] = {0};
+      setMatrixIntensity(MATRIX_GAME_INTENSITY);
+      writeMatrixRows(blankRows, blankRows, blankRows);
       clockShown = false;
     }
     return;
@@ -229,16 +254,17 @@ void updateMax7219Clock(bool enabled) {
 
   uint8_t awayRows[8];
   uint8_t homeRows[8];
+  uint8_t centerRows[8] = {0};
   int hour = localTime.tm_hour % 12;
   if (hour == 0) hour = 12;
-  // Both matrices use the same two 3x5 digit style (minutes with a leading
+  // Both outer matrices use the same two 3x5 digit style (minutes with a leading
   // zero, e.g. "07", hours likewise) so the clock reads as one consistent
   // font. An earlier revision rendered single-digit hours in the large 5x7
   // glyph, which looked mismatched next to the minutes.
   scoreToMatrixRows(localTime.tm_min, awayRows, true, true);
   scoreToMatrixRows(hour, homeRows, true, true);
   setMatrixIntensity(MATRIX_CLOCK_INTENSITY);
-  writeMatrixRows(awayRows, homeRows);
+  writeMatrixRows(awayRows, centerRows, homeRows);
   lastClockMinute = localTime.tm_min;
   clockShown = true;
 }
@@ -250,35 +276,41 @@ void invalidateMax7219Clock() {
 }
 
 void setMax7219PixelsOverride(bool enabled, uint64_t awayPixels,
-                              uint64_t homePixels) {
+                              uint64_t centerPixels, uint64_t homePixels) {
   if (enabled) {
     if (matrixOverrideActive &&
         awayPixels == matrixOverrideAwayPixels &&
+        centerPixels == matrixOverrideCenterPixels &&
         homePixels == matrixOverrideHomePixels) {
       return;
     }
     if (!matrixOverrideActive) {
       memcpy(savedAwayRows, displayedAwayRows, sizeof(savedAwayRows));
+      memcpy(savedCenterRows, displayedCenterRows, sizeof(savedCenterRows));
       memcpy(savedHomeRows, displayedHomeRows, sizeof(savedHomeRows));
       savedMatrixIntensity = matrixIntensity;
       matrixOverrideActive = true;
     }
     matrixOverrideAwayPixels = awayPixels;
+    matrixOverrideCenterPixels = centerPixels;
     matrixOverrideHomePixels = homePixels;
 
     uint8_t awayRows[8] = {0};
+    uint8_t centerRows[8] = {0};
     uint8_t homeRows[8] = {0};
     for (int row = 0; row < 8; ++row) {
       for (int column = 0; column < 8; ++column) {
         int pixel = row * 8 + column;
         setMatrixBit(awayRows, row, column,
                      (awayPixels >> pixel) & 1U);
+        setMatrixBit(centerRows, row, column,
+                     (centerPixels >> pixel) & 1U);
         setMatrixBit(homeRows, row, column,
                      (homePixels >> pixel) & 1U);
       }
     }
     setMatrixIntensity(MATRIX_GAME_INTENSITY);
-    writeMatrixRows(awayRows, homeRows);
+    writeMatrixRows(awayRows, centerRows, homeRows);
     return;
   }
 
@@ -287,67 +319,71 @@ void setMax7219PixelsOverride(bool enabled, uint64_t awayPixels,
   setMatrixIntensity(savedMatrixIntensity);
   if (hasDisplayedRows) {
     uint8_t awayRows[8];
+    uint8_t centerRows[8];
     uint8_t homeRows[8];
     memcpy(awayRows, savedAwayRows, sizeof(awayRows));
+    memcpy(centerRows, savedCenterRows, sizeof(centerRows));
     memcpy(homeRows, savedHomeRows, sizeof(homeRows));
-    writeMatrixRows(awayRows, homeRows);
+    writeMatrixRows(awayRows, centerRows, homeRows);
   }
 }
 
 void setMax7219UpdateNotice(bool enabled) {
-  uint64_t homePixels = 0;
+  uint64_t centerPixels = 0;
   if (enabled) {
     for (int row = 0; row < 5; ++row) {
       for (int column = 0; column < 3; ++column) {
-        if (LETTER_D_3X5[row] & (1U << (2 - column))) {
-          int pixel = (row + 1) * 8 + (column + 1);
-          homePixels |= (uint64_t)1 << pixel;
-        }
         if (LETTER_U_3X5[row] & (1U << (2 - column))) {
+          int pixel = (row + 1) * 8 + (column + 1);
+          centerPixels |= (uint64_t)1 << pixel;
+        }
+        if (LETTER_D_3X5[row] & (1U << (2 - column))) {
           int pixel = (row + 1) * 8 + (column + 5);
-          homePixels |= (uint64_t)1 << pixel;
+          centerPixels |= (uint64_t)1 << pixel;
         }
       }
     }
   }
-  setMax7219PixelsOverride(enabled, 0, homePixels);
+  setMax7219PixelsOverride(enabled, 0, centerPixels, 0);
 }
 
 void setMax7219Bar(int litColumns) {
   if (litColumns < 0)  litColumns = 0;
-  if (litColumns > 16) litColumns = 16;
+  if (litColumns > 24) litColumns = 24;
   setMatrixIntensity(MATRIX_GAME_INTENSITY);
 
-  // Fill full-height columns of a logical 16-wide strip: the away matrix
-  // carries columns 0..7, the home matrix 8..15. writeMatrixRows applies the
-  // same physical-rotation corrections the score digits get, so the bar
-  // grows in one consistent direction across both modules.
+  // Fill full-height columns of a logical 24-wide strip across all matrices.
   uint8_t awayRows[8] = {0};
+  uint8_t centerRows[8] = {0};
   uint8_t homeRows[8] = {0};
   for (int c = 0; c < litColumns; ++c) {
     for (int r = 0; r < 8; ++r) {
-      setMatrixBit(c < 8 ? awayRows : homeRows, r, c & 7, 1);
+      uint8_t* matrixRows = c < 8 ? awayRows : (c < 16 ? centerRows : homeRows);
+      setMatrixBit(matrixRows, r, c & 7, 1);
     }
   }
-  writeMatrixRows(awayRows, homeRows);
+  writeMatrixRows(awayRows, centerRows, homeRows);
 }
 
 void runMax7219BootTest() {
   uint8_t homeRows[8] = {0};
+  uint8_t centerRows[8] = {0};
   uint8_t awayRows[8] = {0};
   for (int row = 0; row < 7; row++) {
     homeRows[row] = (LETTER_H_5X7[row] & 0x1F) << 1; // Center 5 bits in 8 cols
     awayRows[row] = (LETTER_A_5X7[row] & 0x1F) << 1;
+    centerRows[row] = (FONT_5X7[2][row] & 0x1F) << 1;
   }
   rotateMatrix180(homeRows);
   rotateMatrix90Ccw(awayRows);
 
   for (uint8_t row = 0; row < 8; row++) {
     uint8_t reg = MAX7219_REG_DIGIT0 + row;
-    max7219Send(reg, homeRows[row], reg, awayRows[row]);
+    max7219Send(reg, awayRows[row], reg, centerRows[row],
+                reg, homeRows[row]);
   }
 
-  Serial.println("[HW TEST] MAX7219 boot test: H=home, A=away");
+  Serial.println("[HW TEST] MAX7219 boot test: A=left, 2=center, H=right");
   delay(2000);
   setMax7219Scores(MAX7219_SCORE_BLANK, MAX7219_SCORE_BLANK);
 }

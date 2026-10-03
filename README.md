@@ -1,23 +1,24 @@
 # BaseballMiniBoard
 
-ESP32-S3 firmware for a headless mini MLB scoreboard: 2× MAX7219 8×8 score
-matrices and 7 balls/strikes/outs LEDs — **no TFT screen**. When a preferred
-team is live, the matrices show the away/home scores and the LEDs count
-balls/strikes/outs; otherwise the matrices show the local time as an idle
-clock. Both out LEDs indicate that the board is offline; all three ball LEDs
-indicate that it is connected and idle. At boot, the setup access point and
-captive portal are available for Wi-Fi configuration and remain available
-after the board connects to the configured Wi-Fi network (AP+STA mode). The board
-self-updates its firmware from this repo's `releases/` folder; during an
-update, all seven count LEDs flash every 250 ms and the Home matrix displays
-`UD`.
+ESP32-S3 firmware for a headless mini MLB scoreboard: three MAX7219 8×8
+matrices (Away score, Inning, Home score) and 7 balls/strikes/outs LEDs —
+**no TFT screen**. During a preferred-team game, the matrices show both scores
+and the inning/half (for example, `T5` or `B5`), while the LEDs count
+balls/strikes/outs. At idle, the outer matrices show the local time and the
+Inning matrix is blank. Both out LEDs indicate that the board is offline; all
+three ball LEDs indicate that it is connected and idle. At boot, the setup
+access point and captive portal are available for Wi-Fi configuration and
+remain available after the board connects to the configured Wi-Fi network
+(AP+STA mode). The board self-updates its firmware from this repo's
+`releases/` folder; during an update, all seven count LEDs flash every 250 ms
+and the Inning matrix displays `UD`.
 
 Forked from the [MLBScoreboard](https://github.com/ubiconet/mlb_scoreboard)
 project (v2.60) with the TFT panel and everything that existed only to feed
 it removed: boot/OTA/setup screens, the linescore/waiting renderers, the
 news ticker, the at-bat result card, standings, and the team/boot logo
-assets. The firmware-update "do not turn off" state now shows as a progress
-bar across the two matrices.
+assets. The firmware-update "do not turn off" state is shown on the Inning
+matrix while the count LEDs flash.
 
 The repo is still a **sport scoreboard template**: the generic framework
 (`src/common/` + `src/main.cpp`) is sport-agnostic, and everything MLB

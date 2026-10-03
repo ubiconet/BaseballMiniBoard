@@ -22,6 +22,10 @@ enum class ScoreboardState {
   LIVE_GAME
 };
 ScoreboardState scoreboardState = ScoreboardState::WAITING;
+const char* const MLB_COUNT_LED_LABELS[7] = {
+    "Ball 1", "Ball 2", "Ball 3", "Strike 1", "Strike 2", "Out 1", "Out 2"};
+const char* const MLB_MATRIX_LABELS[3] = {
+    "Away score", "Inning", "Home score"};
 
 // "Last seen" generation counters for the snapshots we consume.
 uint32_t sLastLinescoreGen = 0;
@@ -64,7 +68,8 @@ namespace sport {
 const char* name() { return "Baseball MiniBoard"; }
 
 NetworkBranding branding() {
-  return NetworkBranding{name(), NETWORK_AP_SSID, NETWORK_HOSTNAME};
+  return NetworkBranding{name(), NETWORK_AP_SSID, NETWORK_HOSTNAME,
+                         MLB_COUNT_LED_LABELS, MLB_MATRIX_LABELS};
 }
 
 const NetworkTeamOption* teamOptions(size_t& count) {
@@ -82,7 +87,7 @@ void setup() {
   initCountLeds(countLedPins);
   initLedMatrix(MAX7219_DIN_PIN, MAX7219_CLK_PIN, MAX7219_CS_PIN);
 
-  // TEST ONLY: shows H (home) / A (away) on the score matrices; leave enabled during hardware validation.
+  // TEST ONLY: shows A/2/H on the Away, Inning, and Home matrices.
   //runMax7219BootTest();
 
   // TEST ONLY: cycles ball/strike/out LEDs one at a time — the headless

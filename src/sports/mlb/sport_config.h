@@ -14,22 +14,23 @@
 // src/sports/<sport>, edit this file, and point the env's -I flag and
 // build_src_filter at the new folder (see README "new sport" checklist).
 //
-// This build has no TFT: the only displays are the two MAX7219 score
-// matrices and the seven discrete count LEDs.
+// This build has no TFT: the only displays are the three MAX7219 matrices
+// and the seven discrete count LEDs.
 
-// ---- MAX7219 8x8 LED Matrix displays (2 cascaded modules: 0=Away, 1=Home) --
+// ---- MAX7219 8x8 LED Matrix displays (3 cascaded modules) ------------------
+// Device order from the end of the chain: 0=Away, 1=Inning, 2=Home.
 static const int MAX7219_DIN_PIN = 14;
 static const int MAX7219_CLK_PIN = 8;
 static const int MAX7219_CS_PIN = 16;
 
 // ---- Discrete Count LEDs (GPIO pins; balls/strikes/outs) --------------------
-static const int BALL_3_PIN = 1;
-static const int BALL_2_PIN = 2;
-static const int BALL_1_PIN = 3;
-static const int STRIKE_2_PIN = 4;
-static const int STRIKE_1_PIN = 5;
-static const int OUT_2_PIN = 6;
-static const int OUT_1_PIN = 7;
+static const int OUT_2_PIN = 1;
+static const int OUT_1_PIN = 2;
+static const int STRIKE_2_PIN = 3;
+static const int STRIKE_1_PIN = 4;
+static const int BALL_3_PIN = 5;
+static const int BALL_2_PIN = 6;
+static const int BALL_1_PIN = 7;
 
 // ---- Branding (AP network name, hostname, portal title) ---------------------
 static const char* NETWORK_AP_SSID = "BASEBALL_MINIBOARD";

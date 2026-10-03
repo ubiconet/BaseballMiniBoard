@@ -5,7 +5,7 @@
 // Firmware self-update against the releases/manifest.json in the GitHub
 // repo (written by `pio run -t deploy`). Runs entirely on the core-0 data
 // task: fetch manifest, compare version with FIRMWARE_VERSION, and when
-// they differ download + flash the new binary while the Home matrix shows
+// they differ download + flash the new binary while the center matrix shows
 // "UD" and the count LEDs flash (see handleOtaIndicator()).
 // onlineForMs = milliseconds since the network last came online (0 while
 // offline); the first check fires shortly after association.

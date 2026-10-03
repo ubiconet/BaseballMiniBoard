@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <string.h>
 
 #include "common/data/snapshot_channel.h"
 #include "common/hal/count_leds.h"
@@ -7,8 +8,8 @@
 
 namespace {
 SnapshotChannel<DisplayTestState> gDisplayTestChannel;
-DisplayTestState gRequestedState = {true, false, 0, 0, 0};
-DisplayTestState gAppliedState = {false, false, 0, 0, 0};
+DisplayTestState gRequestedState = {true, false, 0, {0, 0, 0}};
+DisplayTestState gAppliedState = {false, false, 0, {0, 0, 0}};
 uint32_t gLastGeneration = 0;
 bool gWasActive = false;
 
@@ -32,11 +33,11 @@ bool setDisplayTestLed(uint8_t index, bool enabled) {
   return true;
 }
 
-bool setDisplayTestPixel(bool homeMatrix, uint8_t x, uint8_t y, bool enabled) {
-  if (x >= 8 || y >= 8) return false;
+bool setDisplayTestPixel(uint8_t matrixIndex, uint8_t x, uint8_t y,
+                         bool enabled) {
+  if (matrixIndex >= 3 || x >= 8 || y >= 8) return false;
   uint64_t bit = static_cast<uint64_t>(1) << (y * 8 + x);
-  uint64_t& pixels = homeMatrix ? gRequestedState.homePixels
-                                : gRequestedState.awayPixels;
+  uint64_t& pixels = gRequestedState.matrixPixels[matrixIndex];
   if (enabled) pixels |= bit;
   else pixels &= ~bit;
   gRequestedState.active = true;
@@ -47,8 +48,8 @@ bool setDisplayTestPixel(bool homeMatrix, uint8_t x, uint8_t y, bool enabled) {
 void stopDisplayTest() {
   gRequestedState.active = false;
   gRequestedState.ledMask = 0;
-  gRequestedState.awayPixels = 0;
-  gRequestedState.homePixels = 0;
+  memset(gRequestedState.matrixPixels, 0,
+         sizeof(gRequestedState.matrixPixels));
   publishDisplayTestState();
 }
 
@@ -61,15 +62,16 @@ bool handleDisplayTest() {
   if (!gAppliedState.active) {
     if (gWasActive) {
       setCountLedsOverride(false, 0);
-      setMax7219PixelsOverride(false, 0, 0);
+      setMax7219PixelsOverride(false, 0, 0, 0);
       gWasActive = false;
     }
     return false;
   }
 
   setCountLedsOverride(true, gAppliedState.ledMask);
-  setMax7219PixelsOverride(true, gAppliedState.awayPixels,
-                           gAppliedState.homePixels);
+  setMax7219PixelsOverride(true, gAppliedState.matrixPixels[0],
+                           gAppliedState.matrixPixels[1],
+                           gAppliedState.matrixPixels[2]);
   gWasActive = true;
   return true;
 }

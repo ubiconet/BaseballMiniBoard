@@ -45,9 +45,9 @@ description: Build the BaseballMiniBoard firmware and publish a release to GitHu
 
 ## Getting the update onto the device
 
-The device checks the manifest automatically after boot (attempts in the
-first ~100 s, then every 10 min) and flashes itself — a progress bar
-fills across the two score matrices while it downloads; do not power off.
+The device checks the manifest automatically after boot and flashes itself
+when a newer version is published — "UD" appears on the Inning matrix while
+all count LEDs flash during download; do not power off.
 On this network, TLS (port 443) to GitHub is frequently blocked, so when
 the user wants the device updated NOW, use the portal upload instead — it
 serves plain HTTP on the LAN and always works:

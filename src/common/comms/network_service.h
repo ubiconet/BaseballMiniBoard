@@ -11,6 +11,8 @@ struct NetworkBranding {
   const char* deviceName;  // e.g. "MLB Scoreboard" — portal <title>/heading
   const char* apSsid;      // fallback provisioning AP network name
   const char* hostname;    // base hostname; a per-device suffix is appended
+  const char* const* countLedLabels;  // seven labels for the display-test page
+  const char* const* matrixLabels;    // three labels in physical order
 };
 
 // One selectable team in the portal's preferred-team dropdowns.

@@ -11,13 +11,13 @@
 // active gamePk, fetch diagnostics) lives in mlb_state.h; the firmware
 // update indicator lives in common/ui/ota_indicator.
 
-// Live game: away/home runs on the score matrices, balls/strikes/outs on
-// the count LEDs (cleared between half innings). Skips the bit-banged
-// matrix bus when nothing changed since the last call.
+// Live game: Away, Inning, and Home matrices show score/half-inning state;
+// balls/strikes/outs appear on the count LEDs (cleared between half innings).
+// Skips matrix writes when their content has not changed.
 void renderLinescore(const LinescoreSnapshot& linescore);
 
-// Waiting mode: all ball LEDs indicate a connected, idle board and the score
-// matrices are released to the idle clock (updateMax7219Clock repaints them).
+// Waiting mode: all ball LEDs indicate a connected, idle board; the outer
+// matrices are released to the idle clock and the Inning matrix is blank.
 void renderWaiting(const int preferredTeamIds[3]);
 
 // Offline mode: light both out LEDs while the board has no network connection.

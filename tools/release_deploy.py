@@ -55,8 +55,10 @@ def _publish_releases(project_dir, version):
     if add.returncode != 0:
         env.Exit("git add releases failed:\n" + add.stderr.strip())
 
-    commit = _git(["commit", "-m", "Release baseball_miniboard %s" % version],
-                  project_dir)
+    commit = _git([
+        "commit", "-m", "Release baseball_miniboard %s" % version,
+        "-m", "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>",
+    ], project_dir)
     if commit.returncode != 0:
         if "nothing to commit" in (commit.stdout + commit.stderr):
             print("releases/ unchanged — nothing to publish")

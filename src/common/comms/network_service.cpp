@@ -37,7 +37,8 @@ bool apUp = false;
 bool otaStarted = false;
 // Branding + team options, injected at startNetworkServices() by the app
 // shell (from the sport's config/tables). Empty until then.
-NetworkBranding netBranding = {"Scoreboard", "SCOREBOARD", "scoreboard"};
+NetworkBranding netBranding = {
+    "Scoreboard", "SCOREBOARD", "scoreboard", nullptr, nullptr};
 const NetworkTeamOption* netTeamOptions = nullptr;
 size_t netTeamOptionCount = 0;
 int netDefaultTeams[3] = {0, 0, 0};
@@ -354,6 +355,32 @@ String htmlEscape(const String& text) {
   return out;
 }
 
+String jsonStringLiteral(const char* text) {
+  String encoded = "\"";
+  for (const char* c = text; *c != '\0'; ++c) {
+    if (*c == '"' || *c == '\\') encoded += '\\';
+    if (*c == '\n') encoded += "\\n";
+    else if (*c == '\r') encoded += "\\r";
+    else encoded += *c;
+  }
+  encoded += '"';
+  return encoded;
+}
+
+String buildCountLedLabelsJson() {
+  String labels = "[";
+  for (size_t i = 0; i < 7; ++i) {
+    if (i > 0) labels += ",";
+    const char* label =
+        netBranding.countLedLabels ? netBranding.countLedLabels[i] : nullptr;
+    String fallback = "Count LED ";
+    fallback += String(i + 1);
+    labels += jsonStringLiteral(label ? label : fallback.c_str());
+  }
+  labels += "]";
+  return labels;
+}
+
 void refreshScanCache() {
   int8_t result = WiFi.scanComplete();
   if (scanActive && result >= 0) {
@@ -465,7 +492,7 @@ hr{border:0;border-top:1px solid #1c4587;margin:20px 0}
   page += R"html(>Display current time on score boards when no game is live</label>
 <button type="submit">Save & Connect Scoreboard</button></form>
 <hr><h3>Display Test</h3>
-<p class="hint">Test each count LED and every pixel on both score matrices.</p>
+<p class="hint">Test each configured count LED and every matrix pixel independently.</p>
 <p><a style="color:#f5c400" href="/display-test">Open display test page</a></p>
 <hr><h3>Firmware Update</h3>
 <p class="hint">Installed: )html" + String(FIRMWARE_VERSION) + R"html(. Automatic checks run at boot and periodically.</p>
@@ -486,7 +513,7 @@ else e.textContent='Not connected to Wi-Fi';
 refreshNetworkStatus();setInterval(refreshNetworkStatus,3000);
 function otaCheck(){otaWaiting=true;document.getElementById('otaStatus').textContent='Checking...';fetch('/ota/check',{method:'POST'})}
 setInterval(function(){fetch('/ota/status').then(function(r){return r.json()}).then(function(s){var e=document.getElementById('otaStatus');
-if(s.stage==='DOWNLOADING'){otaWaiting=false;e.textContent='Downloading update '+s.progress+'% - watch the Home matrix and count LEDs; do not power off.'}
+if(s.stage==='DOWNLOADING'){otaWaiting=false;e.textContent='Downloading update '+s.progress+'% - watch Matrix 2 and the count LEDs; do not power off.'}
 else if(s.stage==='REBOOTING'){otaWaiting=false;e.textContent='Update installed - rebooting...'}
 else if(s.stage==='FAILED'){otaWaiting=false;e.textContent='Update failed (network may block GitHub) - use the manual upload below.'}
 else if(otaWaiting&&s.checked&&!s.ok){otaWaiting=false;e.textContent='Check failed - this network may block GitHub. Use the manual upload below.'}
@@ -645,13 +672,14 @@ void serveOtaStatus() {
 
 void sendDisplayTestState() {
   DisplayTestState test = getRequestedDisplayTestState();
-  char body[112];
+  char body[128];
   snprintf(body, sizeof(body),
-           "{\"active\":%s,\"leds\":%u,\"away\":\"%016llx\","
-           "\"home\":\"%016llx\"}",
+           "{\"active\":%s,\"leds\":%u,\"matrices\":["
+           "\"%016llx\",\"%016llx\",\"%016llx\"]}",
            test.active ? "true" : "false", test.ledMask,
-           (unsigned long long)test.awayPixels,
-           (unsigned long long)test.homePixels);
+           (unsigned long long)test.matrixPixels[0],
+           (unsigned long long)test.matrixPixels[1],
+           (unsigned long long)test.matrixPixels[2]);
   server.send(200, "application/json", body);
 }
 
@@ -689,7 +717,7 @@ void serveDisplayTestState() {
 
 void serveDisplayTestPage() {
   markPortalActivity();
-  server.send(200, "text/html", R"html(<!doctype html><html><head>
+  String page = R"html(<!doctype html><html><head>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Display Test</title><style>
 body{margin:0;background:#061b46;color:#fff;font:16px system-ui,sans-serif}
@@ -707,25 +735,35 @@ button.on{background:#f5c400;color:#000;border-color:#f5c400}
 <p class="hint">Tap a control to toggle one count LED or one matrix pixel. The test takes over the board until you stop it.</p>
 <h2>Count LEDs</h2><div class="leds" id="leds"></div>
 <h2>8×8 Matrices</h2><div class="matrices">
-<section><h3>Away matrix (position 1)</h3><div class="matrix" id="away"></div></section>
-<section><h3>Home / inning matrix (position 2)</h3><div class="matrix" id="home"></div></section>
+<section><h3>@@MATRIX1@@ (position 1)</h3><div class="matrix" id="matrix1"></div></section>
+<section><h3>@@MATRIX2@@ (position 2)</h3><div class="matrix" id="matrix2"></div></section>
+<section><h3>@@MATRIX3@@ (position 3)</h3><div class="matrix" id="matrix3"></div></section>
 </div><p id="message" class="hint"></p>
 <button class="stop" onclick="stopTest()">Stop test and restore scoreboard</button>
 <p><a href="/">Back to board settings</a></p></main>
 <script>
-var state={active:false,leds:0,away:'0000000000000000',home:'0000000000000000'};
-var ledNames=['Ball 1','Ball 2','Ball 3','Strike 1','Strike 2','Out 1','Out 2'];
+var state={active:false,leds:0,matrices:['0000000000000000','0000000000000000','0000000000000000']};
+var ledNames=@@LED_LABELS@@;
 function pixelOn(hex,index){var shift=index%4;var digit=15-Math.floor(index/4);return ((parseInt(hex.charAt(digit),16)>>shift)&1)!==0}
 function updateHex(hex,index,on){var digits=hex.split(''),digit=15-Math.floor(index/4),bit=1<<(index%4),value=parseInt(digits[digit],16);digits[digit]=(on?(value|bit):(value&~bit)).toString(16);return digits.join('')}
 function post(path,data){return fetch(path,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(data)}).then(function(r){if(!r.ok)throw new Error('Request failed');return r.json()}).then(function(s){state=s;draw()}).catch(function(e){document.getElementById('message').textContent=e.message})}
 function draw(){var leds=document.getElementById('leds');leds.textContent='';
 ledNames.forEach(function(name,index){var b=document.createElement('button'),on=(state.leds&(1<<index))!==0;b.textContent=name+(on?' — ON':' — OFF');b.className=on?'on':'';b.onclick=function(){post('/display-test/led',{index:index,on:on?'0':'1'})};leds.appendChild(b)});
-['away','home'].forEach(function(which){var grid=document.getElementById(which);grid.textContent='';for(var y=0;y<8;y++)for(var x=0;x<8;x++){var index=y*8+x,on=pixelOn(state[which],index),b=document.createElement('button');b.className='pixel'+(on?' on':'');b.setAttribute('aria-label',which+' pixel '+(x+1)+','+(y+1));b.onclick=(function(matrix,px,py,enabled){return function(){var key=matrix;state[key]=updateHex(state[key],py*8+px,enabled);post('/display-test/pixel',{matrix:matrix,x:px,y:py,on:enabled?'0':'1'})}})(which,x,y,on);grid.appendChild(b)}});
+state.matrices.forEach(function(hex,matrix){var grid=document.getElementById('matrix'+(matrix+1));grid.textContent='';for(var y=0;y<8;y++)for(var x=0;x<8;x++){var index=y*8+x,on=pixelOn(hex,index),b=document.createElement('button');b.className='pixel'+(on?' on':'');b.setAttribute('aria-label','Matrix '+(matrix+1)+' pixel '+(x+1)+','+(y+1));b.onclick=(function(matrixIndex,px,py,enabled){return function(){state.matrices[matrixIndex]=updateHex(state.matrices[matrixIndex],py*8+px,enabled);post('/display-test/pixel',{matrix:matrixIndex,x:px,y:py,on:enabled?'0':'1'})}})(matrix,x,y,on);grid.appendChild(b)}});
 document.getElementById('message').textContent=state.active?'Display test active.':'';
 }
 function stopTest(){fetch('/display-test/stop',{method:'POST'}).then(function(){location.href='/'})}
 fetch('/display-test/state').then(function(r){return r.json()}).then(function(s){state=s;draw()}).catch(function(){document.getElementById('message').textContent='Unable to read display state.'});
-</script></body></html>)html");
+</script></body></html>)html";
+  for (size_t i = 0; i < 3; ++i) {
+    const char* label = netBranding.matrixLabels
+        ? netBranding.matrixLabels[i] : nullptr;
+    String placeholder = "@@MATRIX" + String(i + 1) + "@@";
+    page.replace(placeholder, htmlEscape(label ? String(label)
+                                               : "Matrix " + String(i + 1)));
+  }
+  page.replace("@@LED_LABELS@@", buildCountLedLabelsJson());
+  server.send(200, "text/html", page);
 }
 
 void handleDisplayTestLed() {
@@ -745,17 +783,18 @@ void handleDisplayTestPixel() {
   markPortalActivity();
   uint8_t x = 0;
   uint8_t y = 0;
+  uint8_t matrixIndex = 0;
   bool enabled = false;
-  String matrix = server.arg("matrix");
   if (!parseDisplayTestCoordinate("x", x) ||
       !parseDisplayTestCoordinate("y", y) ||
-      !parseDisplayTestBoolean("on", enabled) ||
-      (matrix != "away" && matrix != "home")) {
+      !parseDisplayTestCoordinate("matrix", matrixIndex) ||
+      matrixIndex >= 3 ||
+      !parseDisplayTestBoolean("on", enabled)) {
     server.send(400, "text/plain",
-                "Expected matrix=away|home, x/y=0..7 and on=0|1");
+            "Expected matrix=0..2, x/y=0..7 and on=0|1");
     return;
   }
-  setDisplayTestPixel(matrix == "home", x, y, enabled);
+  setDisplayTestPixel(matrixIndex, x, y, enabled);
   sendDisplayTestState();
 }
 

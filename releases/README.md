@@ -35,7 +35,7 @@ works over plain HTTP on your LAN — from a browser:
    also works when discovery is healthy).
 2. Choose `releases/baseball_miniboard_latest.bin`.
 3. Click **Upload & Flash** — the board reboots into the new firmware
-   (progress bar across the score matrices while it writes).
+   ("UD" on the Inning matrix while the count LEDs flash during download).
 
 Or from PowerShell:
 

@@ -24,7 +24,7 @@
 // release binary, so the definition must stay here. There is no boot splash
 // to draw it on — confirm the running version via the Serial boot banner
 // ([BOOT] FW=...) or the setup portal's Firmware Update panel.
-static const char* FIRMWARE_VERSION = "v1.3";
+static const char* FIRMWARE_VERSION = "v1.4";
 
 // ---- Install location (factory default) -------------------------------------
 // POSIX TZ string used ONLY until the user picks a timezone in the setup

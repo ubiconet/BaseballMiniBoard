@@ -4,7 +4,7 @@
 
 // Firmware self-update indicator (driven by the OTA updater on core 0,
 // drawn by handleOtaIndicator() on the render loop). This build has no
-// TFT: an update shows "UD" on the home matrix while all seven count LEDs
+// TFT: an update shows "UD" on the center matrix while all seven count LEDs
 // flash together. Only POD + a small string cross the task boundary.
 
 enum class OtaStage : uint8_t {

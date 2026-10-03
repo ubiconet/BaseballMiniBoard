@@ -11,9 +11,10 @@ OTA-updated device can run without surprises.
 
 - **Target hardware:** ESP32-S3 DevKitC-1 (4 MB flash).
 - **Peripherals (this build is headless — no TFT):**
-  - 2× MAX7219 8×8 LED matrices (DIN=14, CLK=8, CS=16). Device 0 = Away,
-    Device 1 = Home. Scores during a live game; hour/minute as an idle
-    clock otherwise (portal setting can disable the clock).
+  - 3× MAX7219 8×8 LED matrices (DIN=14, CLK=8, CS=16). Device 0 = Away,
+    Device 1 = Inning, Device 2 = Home. Live-game scores and inning/half;
+    outer matrices show hour/minute as an idle clock (portal setting can
+    disable the clock).
   - 7 discrete count LEDs on GPIO 1–7 (balls/strikes/outs).
 - **Origin:** forked from the MLBScoreboard repo (v2.60) with the ST7789
   TFT and everything that only fed it removed. See README.md for the list
@@ -39,14 +40,14 @@ src/
 │   ├── config.h          # framework defaults (SB_DEBUG gate, network/
 │   │                     #   OTA pacing)
 │   ├── app/sport_api.h   # THE contract a sport implements (namespace sport)
-│   ├── hal/              # led_matrix (MAX7219: scores, clock, OTA bar),
+│   ├── hal/              # led_matrix (3× MAX7219: scores and clock),
 │   │                     #   count_leds (7 counter LEDs)
 │   ├── comms/            # http_fetcher (keep-alive HTTP + buffered parse),
 │   │                     #   network_service (Wi-Fi/portal/NVS, branding +
 │   │                     #   team options injected), ota_update
 │   ├── data/             # snapshot_channel.h (cross-core mailbox template),
 │   │                     #   time_util (NTP/ISO-8601 helpers)
-│   └── ui/               # ota_indicator (update progress bar on matrices)
+│   └── ui/               # ota_indicator (UD + flashing count LEDs)
 └── sports/
     └── mlb/              # THE SPORT — replaced wholesale per new sport
         ├── sport_config.h  # pins, branding, poll cadences
@@ -83,8 +84,8 @@ point the env's src filter + `-I` at it, update `OTA_*` URLs in
   priority 1) do all API calls, JSON parsing, and snapshot publishing.
 - **User feedback without a screen:** setup instructions and status go to
   Serial (`[NET]`, `[BOOT]`, `[DISPLAY]` lines); the captive portal is
-  discoverable from any phone; firmware updates show a progress bar across
-  the two matrices.
+  discoverable from any phone; firmware updates show "UD" on the Inning
+  matrix while all seven count LEDs flash.
 
 ---
 
@@ -135,7 +136,8 @@ point the env's src filter + `-I` at it, update `OTA_*` URLs in
   note at the top of `sports/mlb/mlb_client.cpp` and
   `common/comms/http_fetcher.h`). If the manifest version is strictly
   newer than `FIRMWARE_VERSION`, manifest and binary download over ONE
-  reused TLS session while the matrices show the progress bar
+  reused TLS session while the Inning matrix shows "UD" and all count LEDs
+  flash
   (`common/ui/ota_indicator.cpp`), then the device reboots into the new
   image. Failures leave the current firmware running and retry (2 tries
   in the boot window, then every 10 min).
@@ -227,9 +229,10 @@ After any non-trivial change:
    - `[NET] Online: ip=…` appears, and the waiting-mode status line
      (`[DISPLAY] state=WAITING … sched: att=N ok=M err=ok`) confirms the
      data task is publishing schedule fetches.
-   - The MAX7219 matrices show the idle time (hour on home, minute on
-     away) once NTP syncs.
-   - During a live preferred-team game: matrices show away/home scores,
+   - The outer MAX7219 matrices show the idle time (hour on home, minute on
+     away) once NTP syncs; the Inning matrix stays blank.
+   - During a live preferred-team game: matrices show away/home scores and
+     inning/half,
      count LEDs track balls/strikes/outs (clearing between half innings).
 
 ---
