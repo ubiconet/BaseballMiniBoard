@@ -1,8 +1,6 @@
 #include <Arduino.h>
 #include <string.h>
-#include <time.h>
 
-#include "common/data/time_util.h"
 #include "led_matrix.h"
 
 namespace {
@@ -58,10 +56,7 @@ const uint8_t LETTER_A_5X7[7] = {
   0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001
 };
 
-int lastClockMinute = -1;
-bool clockShown = false;
 const uint8_t MATRIX_GAME_INTENSITY = 0x05;
-const uint8_t MATRIX_CLOCK_INTENSITY = 0x01;
 uint8_t matrixIntensity = MATRIX_GAME_INTENSITY;
 uint8_t displayedAwayRows[8] = {0};
 uint8_t displayedCenterRows[8] = {0};
@@ -145,19 +140,13 @@ void rotateMatrix90Ccw(uint8_t rows[8]) {
 }
 
 // Convert integer score (0-99) into 8 row bytes for an 8x8 matrix. A negative
-// score (MAX7219_SCORE_BLANK) leaves the matrix dark for "no active game".
-void scoreToMatrixRows(int score, uint8_t rows[8], bool compactSingleDigit = false,
-                       bool leadingZero = true) {
+// score (MAX7219_SCORE_BLANK) leaves the matrix dark.
+void scoreToMatrixRows(int score, uint8_t rows[8]) {
   for (int i = 0; i < 8; i++) rows[i] = 0;
   if (score < 0) return;
   if (score > 99) score = 99;
 
-  // Render a single digit with the larger, centered 5x7 font whenever we're
-  // allowed to collapse it. Game mode (compactSingleDigit=false) always uses
-  // this; clock mode uses it whenever leadingZero is off so e.g. hour "1".."9"
-  // is centered rather than jammed into the right half of the matrix.
-  bool useSingleDigit = score < 10 && (!compactSingleDigit || !leadingZero);
-  if (useSingleDigit) {
+  if (score < 10) {
     for (int r = 0; r < 7; r++) {
       rows[r] = (FONT_5X7[score][r] & 0x1F) << 1; // Center 5 bits in 8 cols
     }
@@ -232,47 +221,6 @@ void setMax7219Scores(int awayScore, int homeScore) {
 void setMax7219CenterRows(const uint8_t rows[8]) {
   setMatrixIntensity(MATRIX_GAME_INTENSITY);
   writeMatrixRows(displayedAwayRows, rows, displayedHomeRows);
-}
-
-void updateMax7219Clock(bool enabled) {
-  if (!enabled) {
-    if (clockShown) {
-      uint8_t blankRows[8] = {0};
-      setMatrixIntensity(MATRIX_GAME_INTENSITY);
-      writeMatrixRows(blankRows, blankRows, blankRows);
-      clockShown = false;
-    }
-    return;
-  }
-
-  time_t now = time(nullptr);
-  if (!timeIsSynced()) return; // Wait until NTP has established the local clock.
-
-  tm localTime = {};
-  localtime_r(&now, &localTime);
-  if (localTime.tm_min == lastClockMinute) return;
-
-  uint8_t awayRows[8];
-  uint8_t homeRows[8];
-  uint8_t centerRows[8] = {0};
-  int hour = localTime.tm_hour % 12;
-  if (hour == 0) hour = 12;
-  // Both outer matrices use the same two 3x5 digit style (minutes with a leading
-  // zero, e.g. "07", hours likewise) so the clock reads as one consistent
-  // font. An earlier revision rendered single-digit hours in the large 5x7
-  // glyph, which looked mismatched next to the minutes.
-  scoreToMatrixRows(localTime.tm_min, awayRows, true, true);
-  scoreToMatrixRows(hour, homeRows, true, true);
-  setMatrixIntensity(MATRIX_CLOCK_INTENSITY);
-  writeMatrixRows(awayRows, centerRows, homeRows);
-  lastClockMinute = localTime.tm_min;
-  clockShown = true;
-}
-
-void invalidateMax7219Clock() {
-  lastClockMinute = -1;
-  // Treat active-game content as clock-owned so a disabled idle clock clears it.
-  clockShown = true;
 }
 
 void setMax7219PixelsOverride(bool enabled, uint64_t awayPixels,

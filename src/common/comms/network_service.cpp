@@ -1,16 +1,13 @@
 #include <Arduino.h>
-#include <ArduinoJson.h>
 #include <ArduinoOTA.h>
 #include <DNSServer.h>
 #include <HTTPClient.h>
-#include <LittleFS.h>
 #include <Preferences.h>
 #include <Update.h>
 #include <WebServer.h>
 #include <WiFi.h>
 
 #include <stdlib.h>
-#include <time.h>
 
 #include "config.h"
 #include "common/ui/display_test.h"
@@ -24,24 +21,19 @@ WebServer server(80);
 DNSServer dnsServer;
 Preferences preferences;
 
-// PROVISIONING: no network, portal + setup screen locked.
+// PROVISIONING: no network, setup portal is available.
 // CONNECTING:    associating / probing for internet (portal stays available).
-// ONLINE:        internet confirmed; AP torn down, setup screen releases.
+// ONLINE:        internet confirmed; AP and portal remain available.
 enum NetworkState { PROVISIONING, CONNECTING, ONLINE };
 NetworkState state = PROVISIONING;
-
-const char DEFAULT_CONFIG[] = R"json({"version":1,"teams":[]})json";
 
 bool dnsRunning = false;
 bool apUp = false;
 bool otaStarted = false;
-// Branding + team options, injected at startNetworkServices() by the app
-// shell (from the sport's config/tables). Empty until then.
+// Branding and the sport-specific manual page are injected by the app shell.
 NetworkBranding netBranding = {
     "Scoreboard", "SCOREBOARD", "scoreboard", nullptr, nullptr};
-const NetworkTeamOption* netTeamOptions = nullptr;
-size_t netTeamOptionCount = 0;
-int netDefaultTeams[3] = {0, 0, 0};
+PortalRouteRegistrar manualRouteRegistrar = nullptr;
 String deviceHostname;
 // Per-device setup AP SSID (set once MAC is known) so several
 // unprovisioned boards can be powered at once without SSID collisions.
@@ -53,74 +45,6 @@ String savedPassword;
 String pendingSsid;
 String pendingPassword;
 bool hasPending = false;
-bool clockDisplayEnabled = true;
-
-// Display timezone, persisted in NVS ("tz") and selected in the portal.
-// POSIX TZ strings (not IANA names): they are self-contained — DST rules and
-// all — so no tz database needs to ship in the firmware. FACTORY_DEFAULT_TIMEZONE
-// (src/config.h) only covers the very first boot before a selection is saved.
-String tzString;
-
-struct TzOption {
-  const char* label;
-  const char* posix;
-};
-const TzOption TZ_OPTIONS[] = {
-  {"UTC",                                    "UTC0"},
-  {"US Eastern (New York)",                  "EST5EDT,M3.2.0,M11.1.0"},
-  {"US Central (Chicago)",                   "CST6CDT,M3.2.0,M11.1.0"},
-  {"US Mountain (Denver)",                   "MST7MDT,M3.2.0,M11.1.0"},
-  {"US Arizona (no DST)",                    "MST7"},
-  {"US Pacific (Los Angeles)",               "PST8PDT,M3.2.0,M11.1.0"},
-  {"Alaska (Anchorage)",                     "AKST9AKDT,M3.2.0,M11.1.0"},
-  {"Hawaii (Honolulu)",                      "HST10"},
-  {"Canada Atlantic (Halifax)",              "AST4ADT,M3.2.0,M11.1.0"},
-  {"Canada Newfoundland",                    "NST3:30NDT,M3.2.0,M11.1.0"},
-  {"UK & Ireland",                           "GMT0BST,M3.5.0/1,M10.5.0"},
-  {"Central Europe (Paris/Berlin)",          "CET-1CEST,M3.5.0,M10.5.0/3"},
-  {"Eastern Europe (Athens/Helsinki)",       "EET-2EEST,M3.5.0/3,M10.5.0/4"},
-  {"India",                                  "IST-5:30"},
-  {"Japan (Tokyo)",                          "JST-9"},
-  {"Australia Eastern (Sydney)",             "AEST-10AEDT,M10.1.0,M4.1.0/3"},
-  {"Australia Western (Perth)",              "AWST-8"},
-};
-const size_t TZ_OPTIONS_COUNT = sizeof(TZ_OPTIONS) / sizeof(TZ_OPTIONS[0]);
-
-// Only strings from TZ_OPTIONS are accepted from the portal — never feed the
-// TZ environment variable arbitrary user input.
-bool isValidTzString(const char* posix) {
-  if (posix == nullptr) return false;
-  for (size_t i = 0; i < TZ_OPTIONS_COUNT; ++i) {
-    if (strcmp(TZ_OPTIONS[i].posix, posix) == 0) return true;
-  }
-  return false;
-}
-
-// Applies the stored timezone to the C library (localtime/mktime everywhere —
-// idle matrix clock, upcoming-game times, the schedule-day window — follows
-// it). Time itself was already NTP-synced by the shell's one-shot
-// configTzTime(); a mid-session change only needs the TZ update, not a
-// re-sync. Runs on the network task; a concurrent localtime on the render
-// core can at worst produce one odd frame during the switch.
-void applyTimezone() {
-  setenv("TZ", tzString.c_str(), 1);
-  tzset();
-  DBG_PRINTF("[NET] timezone applied: %s\n", tzString.c_str());
-}
-
-String buildTzOptionsHtml(const char* selected) {
-  String html = "";
-  for (size_t i = 0; i < TZ_OPTIONS_COUNT; ++i) {
-    html += "<option value=\"";
-    html += TZ_OPTIONS[i].posix;
-    html += "\"";
-    if (strcmp(TZ_OPTIONS[i].posix, selected) == 0) html += " selected";
-    html += ">";
-    html += TZ_OPTIONS[i].label;
-    html += "</option>";
-  }
-  return html;
-}
 
 uint32_t stateStartedAt = 0;
 uint32_t lastProbeAt = 0;
@@ -129,18 +53,8 @@ uint32_t onlineAt = 0;
 uint32_t lastReconnectAt = 0;
 uint32_t lastDebugAt = 0;
 wl_status_t lastLoggedWiFiStatus = WL_NO_SHIELD;
-bool setupScreenVisible = false;
-// Portal priority mode: while someone is actively using the setup pages,
-// background work pauses so the web server gets the core and the radio to
-// itself (page loads over this device's marginal Wi-Fi stall otherwise).
-// Every request refreshes the window.
-uint32_t portalActiveUntil = 0;
-void markPortalActivity() {
-  portalActiveUntil = millis() + PORTAL_ACTIVITY_WINDOW_MS;
-}
 
-// Only delays the very first boot's CONNECTING->ONLINE transition (see runNetworkStateMachine),
-// so the Wi-Fi setup/connecting screen isn't just a flash; later reconnects skip this.
+// Tracks startup so the state machine can apply the configured first-connect delay.
 uint32_t networkTaskStartedAt = 0;
 bool firstBootConnectHeld = true;
 
@@ -150,7 +64,6 @@ enum SetupDisplayMode { SETUP_CONNECTING, SETUP_AP_INSTRUCTIONS, SETUP_ONLINE_PO
 volatile bool redrawSetupPending = false;
 volatile SetupDisplayMode redrawModeV = SETUP_CONNECTING;
 volatile uint32_t setupIpV = 0;
-volatile bool releasePending = false;
 
 // Async scan cache, only touched from the network task (server handlers run there).
 String scanOptionsHtml;
@@ -297,49 +210,20 @@ void tryReconnectWithSavedNetwork() {
   }
   // Keep the modem awake. Default Wi-Fi power save (min-modem sleep) makes
   // the ESP32 miss beacons on a marginal link and disassociate in storms a
-  // minute or so after connect — exactly the drop/reconnect cycles that
-  // killed the schedule/news fetches. The scoreboard is mains-powered, so
-  // the extra ~40 mA is irrelevant.
+  // minute or so after connect. The scoreboard is mains-powered, so the
+  // extra ~40 mA is irrelevant.
   WiFi.setSleep(false);
   ensureSetupAccessPoint();
   WiFi.begin(savedSsid.c_str(), savedPassword.c_str());
   enterConnecting();
 }
 
-int prefTeam1 = 0; // populated from netDefaultTeams in loadSavedNetwork()
-int prefTeam2 = 0;
-int prefTeam3 = 0;
-
 void loadSavedNetwork() {
   preferences.begin("network", true);
   savedSsid = preferences.getString("ssid", "");
   savedPassword = preferences.getString("password", "");
-  prefTeam1 = preferences.getInt("team1", netDefaultTeams[0]);
-  prefTeam2 = preferences.getInt("team2", netDefaultTeams[1]);
-  prefTeam3 = preferences.getInt("team3", netDefaultTeams[2]);
-  clockDisplayEnabled = preferences.getBool("show_clock", true);
-  tzString = preferences.getString("tz", FACTORY_DEFAULT_TIMEZONE);
-  if (!isValidTzString(tzString.c_str())) {
-    tzString = FACTORY_DEFAULT_TIMEZONE;  // unknown/legacy value: fall back
-  }
-  applyTimezone();
   preferences.end();
 }
-
-String buildTeamOptionsHtml(int selectedId) {
-  String html = "";
-  for (size_t i = 0; i < netTeamOptionCount; i++) {
-    html += "<option value=\"";
-    html += String(netTeamOptions[i].id);
-    html += "\"";
-    if (netTeamOptions[i].id == selectedId) html += " selected";
-    html += ">";
-    html += netTeamOptions[i].label;
-    html += "</option>";
-  }
-  return html;
-}
-
 
 String htmlEscape(const String& text) {
   String out;
@@ -428,38 +312,26 @@ void printSetupInstructions(const String& portalAddress, bool stationConnected) 
   Serial.println(portalUrl);
 }
 
-String readConfig() {
-  File file = LittleFS.open("/config.json", "r");
-  if (!file) {
-    return DEFAULT_CONFIG;
-  }
-  String config = file.readString();
-  file.close();
-  return config;
-}
-
 void redirectToPortal() {
-  markPortalActivity();
   server.sendHeader("Location", "/", true);
   server.send(302, "text/plain", "");
 }
 
 void servePortal() {
-  markPortalActivity();
   server.sendHeader("Cache-Control", "max-age=300");
   String page = R"html(<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>@@NAME@@ Setup</title><style>
 body{margin:0;background:#061b46;color:#fff;font:16px system-ui,sans-serif}
 main{max-width:440px;margin:5vh auto;padding:24px;background:#0b2b62;border:2px solid #dfe9ff;border-radius:8px}
 h1{margin-top:0;font-size:24px}label{display:block;margin:14px 0 4px;font-weight:600}input,select{box-sizing:border-box;width:100%;padding:10px;border:0;border-radius:4px;font-size:15px}
-button{margin-top:20px;width:100%;padding:12px;background:#f5c400;border:0;border-radius:4px;font-weight:700;font-size:16px;color:#000;cursor:pointer}.hint{color:#c5d3ee;font-size:14px;line-height:1.4}
+button,.page-button{box-sizing:border-box;display:block;margin-top:20px;width:100%;padding:12px;background:#f5c400;border:0;border-radius:4px;font-weight:700;font-size:16px;color:#000;cursor:pointer;text-align:center;text-decoration:none}.hint{color:#c5d3ee;font-size:14px;line-height:1.4}
 .network-status{padding:10px 12px;border-radius:5px;font-weight:700}
 .network-status.online{background:#164d37;color:#a8f0c6}
 .network-status.connecting{background:#594718;color:#ffe39a}
 .network-status.provisioning{background:#54252c;color:#ffc0c7}
 hr{border:0;border-top:1px solid #1c4587;margin:20px 0}
 </style></head><body><main><h1>@@NAME@@ Setup</h1>
-<p class="hint">Configure Wi-Fi connection and select your favorite teams in order of priority. The setup access point remains available after the board joins your Wi-Fi.</p>
+<p class="hint">Configure the board's Wi-Fi connection. The setup access point remains available after the board joins your Wi-Fi.</p>
 <p id="networkStatus" class="network-status connecting" role="status" aria-live="polite">Checking network connection…</p>
 <form method="post" action="/save">
 <label for="network">Nearby Wi-Fi Networks</label>
@@ -470,30 +342,14 @@ hr{border:0;border-top:1px solid #1c4587;margin:20px 0}
   page += htmlEscape(savedSsid);
   page += R"html(" required maxlength="32" autocomplete="off">
 <label for="password">Wi-Fi Password</label><input id="password" name="password" type="password" maxlength="63" autocomplete="off">
-<p class="hint">Leave the password blank and the network unchanged to save team preferences without touching the connection.</p>
-<hr>
-<h3>Favorite Team Priorities</h3>
-<label for="team1">Priority 1 Team (Primary)</label><select id="team1" name="team1">)html";
-  page += buildTeamOptionsHtml(prefTeam1);
-  page += R"html(</select>
-<label for="team2">Priority 2 Team</label><select id="team2" name="team2">)html";
-  page += buildTeamOptionsHtml(prefTeam2);
-  page += R"html(</select>
-<label for="team3">Priority 3 Team</label><select id="team3" name="team3">)html";
-  page += buildTeamOptionsHtml(prefTeam3);
-  page += R"html(</select>
-<hr><h3>Display Time Zone</h3>
-<label for="tz">Used for game times, countdowns, and the idle clock</label>
-<select id="tz" name="tz">)html";
-  page += buildTzOptionsHtml(tzString.c_str());
-  page += R"html(</select>
-<hr><label style="display:flex;align-items:center;gap:10px" for="show-clock"><input style="width:auto" id="show-clock" name="show_clock" type="checkbox" value="1")html";
-  if (clockDisplayEnabled) page += " checked";
-  page += R"html(>Display current time on score boards when no game is live</label>
-<button type="submit">Save & Connect Scoreboard</button></form>
+<p class="hint">Leave the password blank to keep the saved password for this network.</p>
+<button type="submit">Save Wi-Fi Settings</button></form>
+<hr><h3>Manual Controls</h3>
+<p class="hint">Set the score, inning, half, and count on the board.</p>
+<a class="page-button" href="/manual">Open Manual Controls</a>
 <hr><h3>Display Test</h3>
 <p class="hint">Test each configured count LED and every matrix pixel independently.</p>
-<p><a style="color:#f5c400" href="/display-test">Open display test page</a></p>
+<a class="page-button" href="/display-test">Open Display Test</a>
 <hr><h3>Firmware Update</h3>
 <p class="hint">Installed: )html" + String(FIRMWARE_VERSION) + R"html(. Automatic checks run at boot and periodically.</p>
 <button type="button" style="margin-top:8px" onclick="otaCheck()">Check for Update Now</button>
@@ -526,34 +382,15 @@ else if(otaWaiting&&s.checked&&s.ok){otaWaiting=false;e.textContent='No update a
 }
 
 void serveStatus() {
-  markPortalActivity();
   const char* name = isOnline() ? "online" :
       ((state == CONNECTING || state == ONLINE) ? "connecting" : "provisioning");
   server.send(200, "application/json", String("{\"state\":\"") + name + "\"}");
 }
 
 void saveNetwork() {
-  markPortalActivity();
   pendingSsid = server.arg("ssid");
   pendingPassword = server.arg("password");
-  if (server.hasArg("team1")) prefTeam1 = server.arg("team1").toInt();
-  if (server.hasArg("team2")) prefTeam2 = server.arg("team2").toInt();
-  if (server.hasArg("team3")) prefTeam3 = server.arg("team3").toInt();
-  clockDisplayEnabled = server.hasArg("show_clock");
-  // Timezone is validated against the option table before it is trusted.
-  bool tzChanged = false;
-  if (server.hasArg("tz")) {
-    String requestedTz = server.arg("tz");
-    if (isValidTzString(requestedTz.c_str()) &&
-        !requestedTz.equals(tzString)) {
-      tzString = requestedTz;
-      tzChanged = true;
-    }
-  }
-
-  // Network settings only count as changed when a new SSID is supplied or a
-  // password is (re-)entered; otherwise this is a team-preferences-only save
-  // and the Wi-Fi connection must be left alone.
+  // An unchanged SSID with a blank password keeps the current connection.
   bool networkChanging = !pendingSsid.isEmpty() &&
                          (pendingSsid != savedSsid || !pendingPassword.isEmpty());
 
@@ -562,35 +399,20 @@ void saveNetwork() {
     return;
   }
 
-  // Team/timezone preferences always persist; credentials only when they changed.
-  preferences.begin("network", false);
-  preferences.putInt("team1", prefTeam1);
-  preferences.putInt("team2", prefTeam2);
-  preferences.putInt("team3", prefTeam3);
-  preferences.putBool("show_clock", clockDisplayEnabled);
-  preferences.putString("tz", tzString);
-  if (networkChanging) {
-    preferences.putString("ssid", pendingSsid);
-    preferences.putString("password", pendingPassword);
-  }
-  preferences.end();
-
-  if (tzChanged) {
-    applyTimezone();  // game times + idle clock follow on the next render
-  }
-
   if (!networkChanging) {
-    Serial.printf("[NET] Preferences-only save: teams=[%d, %d, %d] tz=%s (network untouched)\n",
-                  prefTeam1, prefTeam2, prefTeam3, tzString.c_str());
     server.send(200, "text/html", R"html(<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Saved</title><style>body{margin:0;background:#061b46;color:#fff;font:16px system-ui,sans-serif}
+<title>Settings Unchanged</title><style>body{margin:0;background:#061b46;color:#fff;font:16px system-ui,sans-serif}
 main{max-width:420px;margin:8vh auto;padding:28px;background:#0b2b62;border:2px solid #dfe9ff;border-radius:8px;text-align:center}
-</style></head><body><main><h1>Settings Saved</h1>
-<p>Team priorities and time zone updated — the scoreboard picks them up within a minute.</p>
-<p>Wi-Fi settings were not changed.</p>
-<p><a style="color:#f5c400" href="/">Back to configuration</a></p></main></body></html>)html");
+a{color:#f5c400}</style></head><body><main><h1>Wi-Fi Settings Unchanged</h1>
+<p>The saved Wi-Fi connection was left untouched.</p>
+<p><a href="/">Back to configuration</a></p></main></body></html>)html");
     return;
   }
+
+  preferences.begin("network", false);
+  preferences.putString("ssid", pendingSsid);
+  preferences.putString("password", pendingPassword);
+  preferences.end();
 
   savedSsid = pendingSsid;
   savedPassword = pendingPassword;
@@ -610,40 +432,10 @@ main{max-width:420px;margin:8vh auto;padding:28px;background:#0b2b62;border:2px 
 if(s.state==='online'){document.getElementById('status').textContent='Connected! The scoreboard is going online.'}
 else if(s.state==='provisioning'){document.getElementById('status').textContent='Could not connect or no internet. Check the password and try again.'}
 })},2000)</script></main></body></html>)html");
-  Serial.printf("Saved network '%s' and Teams [%d, %d, %d]\n", pendingSsid.c_str(), prefTeam1, prefTeam2, prefTeam3);
-}
-
-
-void saveConfig() {
-  markPortalActivity();
-  if (server.arg("portal") != NETWORK_PORTAL_PASSWORD) {
-    server.send(401, "text/plain", "Invalid portal password");
-    return;
-  }
-  JsonDocument document;
-  if (deserializeJson(document, server.arg("config"))) {
-    server.send(400, "text/plain", "Invalid JSON configuration");
-    return;
-  }
-  File file = LittleFS.open("/config.tmp", "w");
-  if (!file) {
-    server.send(500, "text/plain", "Unable to write configuration");
-    return;
-  }
-  serializeJson(document, file);
-  file.close();
-  LittleFS.remove("/config.json");
-  LittleFS.rename("/config.tmp", "/config.json");
-  server.send(200, "text/html", "<h1>Saved</h1><p>Runtime settings updated.</p>");
-}
-
-void serveConfig() {
-  markPortalActivity();
-  server.send(200, "application/json", readConfig());
+  Serial.printf("[NET] Saved Wi-Fi network '%s'\n", pendingSsid.c_str());
 }
 
 void handleOtaCheckNow() {
-  markPortalActivity();
   if (!isOnline()) {
     server.send(503, "text/plain", "Not online");
     return;
@@ -653,7 +445,6 @@ void handleOtaCheckNow() {
 }
 
 void serveOtaStatus() {
-  markPortalActivity();
   const char* stage = "NONE";
   switch (getOtaStage()) {
     case OtaStage::DOWNLOADING: stage = "DOWNLOADING"; break;
@@ -711,12 +502,10 @@ bool parseDisplayTestCoordinate(const char* name, uint8_t& value) {
 }
 
 void serveDisplayTestState() {
-  markPortalActivity();
   sendDisplayTestState();
 }
 
 void serveDisplayTestPage() {
-  markPortalActivity();
   String page = R"html(<!doctype html><html><head>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Display Test</title><style>
@@ -767,7 +556,6 @@ fetch('/display-test/state').then(function(r){return r.json()}).then(function(s)
 }
 
 void handleDisplayTestLed() {
-  markPortalActivity();
   uint8_t index = 0;
   bool enabled = false;
   if (!parseDisplayTestCoordinate("index", index) ||
@@ -780,7 +568,6 @@ void handleDisplayTestLed() {
 }
 
 void handleDisplayTestPixel() {
-  markPortalActivity();
   uint8_t x = 0;
   uint8_t y = 0;
   uint8_t matrixIndex = 0;
@@ -799,13 +586,11 @@ void handleDisplayTestPixel() {
 }
 
 void handleDisplayTestStop() {
-  markPortalActivity();
   stopDisplayTest();
   sendDisplayTestState();
 }
 
 void serveUpdatePage() {
-  markPortalActivity();
   server.send(200, "text/html", R"html(<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Firmware Update</title><style>
 body{margin:0;background:#061b46;color:#fff;font:16px system-ui,sans-serif}
@@ -822,7 +607,6 @@ button{margin-top:16px;width:100%;padding:12px;background:#f5c400;border:0;borde
 }
 
 void handleUpdateUpload() {
-  markPortalActivity();
   HTTPUpload& upload = server.upload();
   if (upload.status == UPLOAD_FILE_START) {
     Serial.printf("[UPDATE] Receiving firmware: %s\n", upload.filename.c_str());
@@ -845,7 +629,6 @@ void handleUpdateUpload() {
 }
 
 void handleUpdateResult() {
-  markPortalActivity();
   server.sendHeader("Connection", "close");
   server.send(200, "text/plain", Update.hasError() ? "Update FAILED" : "Update OK, rebooting...");
   delay(500);
@@ -860,13 +643,14 @@ void registerPortalRoutes() {
   server.on("/display-test/pixel", HTTP_POST, handleDisplayTestPixel);
   server.on("/display-test/stop", HTTP_POST, handleDisplayTestStop);
   server.on("/status", HTTP_GET, serveStatus);
-  server.on("/config", HTTP_GET, serveConfig);
   server.on("/save", HTTP_POST, saveNetwork);
-  server.on("/config", HTTP_POST, saveConfig);
   server.on("/update", HTTP_GET, serveUpdatePage);
   server.on("/ota/check", HTTP_POST, handleOtaCheckNow);
   server.on("/ota/status", HTTP_GET, serveOtaStatus);
   server.on("/update", HTTP_POST, handleUpdateResult, handleUpdateUpload);
+  if (manualRouteRegistrar != nullptr) {
+    manualRouteRegistrar(server);
+  }
   server.onNotFound(redirectToPortal);
 }
 
@@ -894,13 +678,8 @@ void runNetworkStateMachine() {
         disconnectStartedAt = millis();
       } else if (millis() - disconnectStartedAt >= NETWORK_RECONNECT_GRACE_MS) {
         Serial.println("[NET] Connection lost; retrying saved network");
-        setupScreenVisible = true;
         tryReconnectWithSavedNetwork();
       }
-    }
-    if (setupScreenVisible && millis() - onlineAt >= NETWORK_SETUP_SCREEN_MS) {
-      setupScreenVisible = false;
-      releasePending = true;
     }
   } else if (state == PROVISIONING) {
     if (!savedSsid.isEmpty() && millis() - stateStartedAt >= NETWORK_PROVISIONING_RETRY_MS) {
@@ -919,52 +698,13 @@ bool isProvisioning() {
   return state == PROVISIONING;
 }
 
-bool portalEngaged() {
-  return millis() < portalActiveUntil;
-}
-
-const char* getSavedWifiSsid() {
-  return savedSsid.c_str();
-}
-
-String getDeviceIp() {
-  return (state == ONLINE) ? WiFi.localIP().toString() : String("");
-}
-
-bool isClockDisplayEnabled() {
-  return clockDisplayEnabled;
-}
-
-// Effective display timezone as a POSIX TZ string ("EST5EDT,M3.2.0,M11.1.0").
-// Selected in the setup portal, persisted in NVS ("tz"); the factory default
-// only applies before the first selection is saved.
-const char* getTzString() {
-  return tzString.c_str();
-}
-
-void getPreferredTeamIds(int outTeamIds[3]) {
-  outTeamIds[0] = prefTeam1;
-  outTeamIds[1] = prefTeam2;
-  outTeamIds[2] = prefTeam3;
-}
-
-
 void startNetworkServices(const NetworkBranding& branding,
-                          const NetworkTeamOption* teamOptions,
-                          size_t teamOptionCount,
-                          const int defaultPreferredTeams[3]) {
+                          PortalRouteRegistrar registerManualRoutes) {
   netBranding = branding;
-  netTeamOptions = teamOptions;
-  netTeamOptionCount = teamOptionCount;
-  netDefaultTeams[0] = defaultPreferredTeams[0];
-  netDefaultTeams[1] = defaultPreferredTeams[1];
-  netDefaultTeams[2] = defaultPreferredTeams[2];
+  manualRouteRegistrar = registerManualRoutes;
   deviceHostname = branding.hostname;
   apSsid = branding.apSsid;
   networkTaskStartedAt = millis();
-  if (!LittleFS.begin(true)) {
-    Serial.println("LittleFS unavailable; runtime settings disabled");
-  }
   registerPortalRoutes();
   WiFi.mode(WIFI_AP_STA);
   // Keep the modem awake from the very first connection (previously only
@@ -983,10 +723,8 @@ void startNetworkServices(const NetworkBranding& branding,
   WiFi.setHostname(deviceHostname.c_str());
   Serial.printf("[NET] Device hostname: %s\n", deviceHostname.c_str());
   // Keep the setup AP and captive portal available while trying saved Wi-Fi
-  // credentials. It is stopped by enterOnline() once the station is connected,
-  // so phones can still configure a board that has not joined a network yet.
+  // credentials and after the station connects.
   server.begin();
-  setupScreenVisible = true;
 
   loadSavedNetwork();
   if (savedSsid.isEmpty()) {
@@ -1031,16 +769,8 @@ void handleNetworkDisplay() {
   }
 }
 
-bool consumeScoreboardRelease() {
-  if (!releasePending) {
-    return false;
-  }
-  releasePending = false;
-  return true;
-}
-
 void startNetworkTask() {
-  xTaskCreatePinnedToCore(
+  BaseType_t networkTaskCreated = xTaskCreatePinnedToCore(
     [](void*) {
       while (true) {
         handleNetworkServices();
@@ -1050,8 +780,31 @@ void startNetworkTask() {
     "NetworkTask",
     8192,
     nullptr,
-    2,  // above the MLB data task: the portal must preempt feed fetches
+    2,  // keep portal handling responsive during OTA work
     nullptr,
     0
   );
+  if (networkTaskCreated != pdPASS) {
+    Serial.println("[NET] ERROR: failed to create network task");
+    return;
+  }
+
+  BaseType_t otaTaskCreated = xTaskCreatePinnedToCore(
+    [](void*) {
+      while (true) {
+        uint32_t onlineForMs = isOnline() ? millis() - onlineAt : 0;
+        serviceOtaUpdates(onlineForMs);
+        vTaskDelay(pdMS_TO_TICKS(10));
+      }
+    },
+    "OtaUpdateTask",
+    12288,
+    nullptr,
+    1,
+    nullptr,
+    0
+  );
+  if (otaTaskCreated != pdPASS) {
+    Serial.println("[OTA] ERROR: failed to create update task");
+  }
 }

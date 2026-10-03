@@ -5,14 +5,13 @@
 #include <WiFiClientSecure.h>
 
 #include "config.h"
-#include "common/comms/http_fetcher.h"
 #include "common/ui/ota_indicator.h"
 #include "ota_update.h"
 
 namespace {
 
-// Download staging buffer. Static (not stack): the data task's 12 KB stack
-// can't absorb a multi-KB read buffer alongside the HTTP/TLS frames.
+// Download staging buffer. Static so it does not consume the update task's
+// stack alongside the HTTP/TLS frames.
 uint8_t sOtaBuf[4096];
 
 bool sCheckedOnce = false;
@@ -20,10 +19,7 @@ bool sLastCheckOk = false;
 uint32_t sLastCheckAt = 0;
 volatile bool sCheckRequested = false;
 uint8_t sBootAttempts = 0;
-// Two shots in the pristine-heap boot window, no more: each failed TLS
-// attempt costs ~15 s (timeout + gap), and holding the feed fetches behind
-// six of them starved game data past the boot screens. The 10-minute
-// periodic retry picks the update check back up regardless.
+// Limit boot retries; the periodic retry takes over when the network is flaky.
 const uint8_t OTA_BOOT_MAX_ATTEMPTS = 2;
 
 // True when the manifest version is strictly NEWER than FIRMWARE_VERSION.
@@ -116,12 +112,8 @@ bool streamBodyToFlash(HTTPClient& http, int total) {
 }  // namespace
 
 void serviceOtaUpdates(uint32_t onlineForMs) {
-  // Check once, early: the TLS handshake needs the still-pristine boot heap
-  // (two ~17 KB contiguous mbedtls buffers; the fragmented post-feed heap's
-  // largest block is too small), which is also why the feed fetches wait
-  // for otaBootGateReached(). The periodic recheck below is best-effort.
-  // A portal-requested check bypasses the pacing (the user is watching),
-  // but still runs on the data task with the heap released.
+  // Check shortly after connection while the heap is least fragmented.
+  // Portal-requested checks bypass the normal retry pacing.
   bool requested = sCheckRequested;
   sCheckRequested = false;
   if (!requested) {
@@ -136,10 +128,6 @@ void serviceOtaUpdates(uint32_t onlineForMs) {
     }
   }
   sLastCheckAt = millis();
-
-  // Run alone: drop the feed keep-alive session and let the data-task
-  // loop hold the feed fetches until this returns.
-  http_fetch::closeSession();
 
   // Claim the update context BEFORE any TLS connection: it needs a 4 KB
   // contiguous staging buffer that the fragmented in-session heap can no
@@ -181,13 +169,11 @@ void serviceOtaUpdates(uint32_t onlineForMs) {
     Update.abort();
     sLastCheckOk = false;
     sBootAttempts++;
-    // After the boot attempts are exhausted, let the feeds start; the
-    // periodic retry takes over from there.
+    // After boot attempts are exhausted, the periodic retry takes over.
     sCheckedOnce = (sBootAttempts >= OTA_BOOT_MAX_ATTEMPTS);
     return;
   }
-  // Manifest fetched: from here on, every outcome counts as "checked" so
-  // the feeds can start.
+  // Manifest fetched: from here on, every outcome counts as "checked".
   sCheckedOnce = true;
   // Null-terminate and parse; values are copied out before the buffer is
   // reused (in-memory parses link strings into the buffer).
@@ -284,20 +270,6 @@ void serviceOtaUpdates(uint32_t onlineForMs) {
   publishOtaStage(OtaStage::NONE, 0);
 }
 
-bool otaUpdateInProgress() {
-  OtaStage stage = getOtaStage();
-  return stage == OtaStage::DOWNLOADING || stage == OtaStage::REBOOTING;
-}
-
 void requestOtaCheckNow() { sCheckRequested = true; }
-bool otaCheckRequested() { return sCheckRequested; }
 bool otaEverChecked() { return sCheckedOnce; }
 bool otaLastCheckOk() { return sLastCheckOk; }
-
-bool otaBootGateReached(uint32_t onlineForMs) {
-  // The TLS handshake needs a pristine heap: two ~17 KB contiguous mbedtls
-  // buffers that the fragmented post-feed heap (largest block ~33 KB) can't
-  // satisfy. So the feed fetches must not start until the first OTA check
-  // has either run or been given up on for this session.
-  return sCheckedOnce || onlineForMs > OTA_BOOT_GATE_TIMEOUT_MS;
-}

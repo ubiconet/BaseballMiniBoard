@@ -6,13 +6,13 @@
 // This header composes the full build configuration from three layers:
 //
 //   1. THIS FILE           — identity of this particular repo/device install:
-//                            firmware version, timezone, self-update URLs.
+//                            firmware version and self-update URLs.
 //   2. common/config.h     — framework defaults shared by every scoreboard
 //                            built on this template (debug gate, boot/network
 //                            timing, OTA pacing).
-//   3. sport_config.h      — the selected sport's profile (pins, branding,
-//                            feed cadences, layout constants). Resolved from
-//                            the src/sports/<sport>/ folder that each
+//   3. sport_config.h      — the selected profile (pins, branding, layout
+//                            constants). Resolved from the src/sports/<sport>/
+//                            folder that each
 //                            PlatformIO env puts on the include path — see
 //                            the -I flag in platformio.ini.
 //
@@ -24,26 +24,14 @@
 // release binary, so the definition must stay here. There is no boot splash
 // to draw it on — confirm the running version via the Serial boot banner
 // ([BOOT] FW=...) or the setup portal's Firmware Update panel.
-static const char* FIRMWARE_VERSION = "v1.4";
-
-// ---- Install location (factory default) -------------------------------------
-// POSIX TZ string used ONLY until the user picks a timezone in the setup
-// portal (the selection is persisted in NVS key "tz" and returned by
-// network_service's getTzString()). It drives every displayed time: the
-// idle clock on the score matrices and the schedule-day window the feed
-// fetch uses. Change this to pre-provision a board's first-boot timezone;
-// afterwards the portal owns it.
-// TEMPLATE CHECKLIST: set to the new install's zone when forking.
-static const char* FACTORY_DEFAULT_TIMEZONE = "EST5EDT,M3.2.0,M11.1.0";
+static const char* FIRMWARE_VERSION = "v2.0";
 
 // ---- Firmware self-update endpoints ----------------------------------------
 // `pio run -t deploy` writes the binary + manifest to releases/ in this
 // GitHub repo; the device polls the manifest after boot and flashes itself
 // when the version is strictly newer than FIRMWARE_VERSION.
-// raw.githubusercontent.com only serves HTTPS — the one TLS connection the
-// firmware still makes (feeds themselves run over plain HTTP; see
-// sports/mlb/mlb_client.cpp). It runs alone on core 0 with the feed session
-// closed, so the ~45 KB TLS context fits.
+// raw.githubusercontent.com only serves HTTPS. The updater uses one TLS
+// session for the manifest and binary so the handshake is not repeated.
 // TEMPLATE CHECKLIST: point these at the new repo when forking for a new
 // sport (and update RAW_BASE + LATEST_FILE in tools/release_deploy.py).
 // These URLs MUST NOT stay pointed at a sibling project's repo — a device

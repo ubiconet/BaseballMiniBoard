@@ -1,16 +1,16 @@
 ---
 name: deploy-firmware
-description: Build the BaseballMiniBoard firmware and publish a release to GitHub (releases/ binaries + manifest.json), then get it onto the device. Use when the user asks to build, deploy, publish, release, or push a firmware update, or to update the mini board device.
+description: Build the BaseballMiniBoard firmware and publish a release to GitHub (releases/ binaries + manifest.json). Use when the user asks to build, deploy, publish, release, or push a firmware update.
 ---
 
 # Deploy a firmware release
 
 ## Preconditions
 
-1. **Bump `FIRMWARE_VERSION`** in `src/config.h` (minor bump, e.g. `v1.0` →
-   `v1.1`). The deploy target refuses to run when the version still equals
-   the one in `releases/manifest.json` — devices only flash strictly newer
-   versions, so an unbumped deploy is a silent no-op.
+1. **Bump `FIRMWARE_VERSION`** in `src/config.h` (minor bump for compatible
+   changes; major bump for breaking changes). The deploy target refuses to
+   run when the version still equals the one in `releases/manifest.json` —
+   devices only flash strictly newer versions.
 2. Build must compile cleanly:
    ```powershell
    & 'C:\Users\Steve\.platformio\penv\Scripts\platformio.exe' run --environment esp32-s3-devkitc-1
@@ -24,8 +24,8 @@ description: Build the BaseballMiniBoard firmware and publish a release to GitHu
 4. Commit the source changes first (the deploy step only commits
    `releases/`):
    ```powershell
-   git add -A
-   git commit -m "<describe the change>; v1.1"
+   git add -u
+   git commit -m "<describe the change>; v2.0"
    ```
 5. Run the deploy — this builds, writes
    `releases/baseball_miniboard_latest.bin` (overwritten),
@@ -46,31 +46,15 @@ description: Build the BaseballMiniBoard firmware and publish a release to GitHu
 ## Getting the update onto the device
 
 The device checks the manifest automatically after boot and flashes itself
-when a newer version is published — "UD" appears on the Inning matrix while
+when a newer version is published — "UD" appears on the center matrix while
 all count LEDs flash during download; do not power off.
-On this network, TLS (port 443) to GitHub is frequently blocked, so when
-the user wants the device updated NOW, use the portal upload instead — it
-serves plain HTTP on the LAN and always works:
 
-7. Find the device IP from the serial log (`[NET] Online: ip=...`), then
-   upload the new binary:
-   ```powershell
-   curl.exe -m 120 -F "update=@releases/baseball_miniboard_latest.bin" http://<device-ip>/update
-   ```
-   (Browser equivalent: `http://<device-ip>/update`, pick the .bin,
-   "Upload & Flash". The device reboots into the new firmware.)
-8. Verify over serial (`[BOOT] FW=<version>` in the boot banner, schedule
-   fetch lines):
-   ```powershell
-   & 'C:\Users\Steve\.platformio\penv\Scripts\python.exe' tools/capture_serial.py COM13 90 serial_log.txt
-   ```
-   (Substitute the current COM port; `pio device list` finds it.)
+Do not install firmware on the physical device unless the user explicitly
+requests it. When requested, prefer its OTA path; a manual portal upload is
+available at `http://<device-ip>/update`.
 
 ## Notes
 
-- The board's USB port also works: `pio run -t upload
-  --upload-port COM13` — use when the device is plugged in and the portal
-  is unreachable.
 - Never edit `releases/manifest.json` by hand; the deploy target owns it.
-- Full background: `AGENTS.md` §2 "Releases + firmware self-update" and
-  `releases/README.md`.
+- Full background: the "Build, version, and release" section in `AGENTS.md`
+  and `releases/README.md`.

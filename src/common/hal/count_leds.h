@@ -2,10 +2,8 @@
 
 #include <Arduino.h>
 
-// Seven discrete status LEDs wired as three bar-graph counters of 3/2/2
-// lamps. On the MLB build they read balls (3) / strikes (2) / outs (2);
-// the driver itself only knows "counter A/B/C" — the sport layer supplies
-// the pin map and passes its own counts.
+// Seven discrete LEDs wired as three bar-graph counters of 3/2/2 lamps.
+// The profile supplies the pin map and the current count for each group.
 //
 // Pin order for initCountLeds():
 //   pins[0..2] = counter A, least-significant lamp first (balls 1..3)

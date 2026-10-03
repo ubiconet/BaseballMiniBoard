@@ -2,10 +2,10 @@
 
 #include <Arduino.h>
 
-// SnapshotChannel — the lock-free cross-core mailbox every feed uses.
+// SnapshotChannel — a lock-free cross-core mailbox for small POD state.
 //
-// One writer (the core-0 data task) calls publish(); any number of readers
-// on the render core call take() with their own "last seen" generation
+// One writer calls publish(); readers on the render core call take() with
+// their own "last seen" generation
 // counter. The payload is a POD struct copied in one assignment; a full
 // memory barrier between payload write and generation bump guarantees the
 // reader never sees a new generation with a half-written struct. No locks,

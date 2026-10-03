@@ -1,8 +1,8 @@
 // ============================================================================
 // Generic scoreboard app shell.
 // ============================================================================
-// This file is sport-agnostic: it owns network bring-up, the one-shot NTP
-// sync, and the firmware-update indicator, then hands every loop pass to
+// This file is sport-agnostic: it owns network bring-up and the firmware
+// update indicator, then hands every loop pass to
 // the sport implementation through the contract in common/app/sport_api.h.
 // Which sport is compiled in is decided by platformio.ini
 // (build_src_filter + include path pointing at src/sports/<sport>).
@@ -12,8 +12,6 @@
 // Serial.
 
 #include <Arduino.h>
-#include <time.h>
-
 #include "config.h"
 #include "common/app/sport_api.h"
 #include "common/comms/network_service.h"
@@ -33,11 +31,8 @@ void setup() {
   sport::setup();
 
   NetworkBranding branding = sport::branding();
-  size_t teamOptionCount = 0;
-  startNetworkServices(branding, sport::teamOptions(teamOptionCount),
-                       teamOptionCount, sport::defaultPreferredTeams());
+  startNetworkServices(branding, sport::registerManualControlRoutes);
   startNetworkTask();
-  sport::startDataTask();  // core-0 feed fetches
 
   // Boot banner — visible over Serial so a freshly uploaded firmware can
   // be confirmed at a glance. The setup portal also shows the version on
@@ -62,17 +57,6 @@ void loop() {
   }
 
   handleNetworkDisplay();
-
-  // One-shot NTP sync once the network is up. The display timezone is a
-  // portal setting (NVS "tz"); the factory default in src/config.h only
-  // covers the very first boot, and a mid-session portal change applies
-  // itself via setenv/tzset in the network service.
-  static bool timeSyncRequested = false;
-  if (!timeSyncRequested && isOnline()) {
-    configTzTime(getTzString(), "pool.ntp.org", "time.nist.gov");
-    timeSyncRequested = true;
-    DBG_PRINTF("[TIME] NTP sync requested; timezone=%s\n", getTzString());
-  }
 
   SportTickContext ctx = {millis(), isOnline(), isProvisioning()};
   sport::tick(ctx);

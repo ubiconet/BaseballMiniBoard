@@ -1,85 +1,48 @@
-# BaseballMiniBoard
+# Baseball MiniBoard
 
-ESP32-S3 firmware for a headless mini MLB scoreboard: three MAX7219 8×8
-matrices (Away score, Inning, Home score) and 7 balls/strikes/outs LEDs —
-**no TFT screen**. During a preferred-team game, the matrices show both scores
-and the inning/half (for example, `T5` or `B5`), while the LEDs count
-balls/strikes/outs. At idle, the outer matrices show the local time and the
-Inning matrix is blank. Both out LEDs indicate that the board is offline; all
-three ball LEDs indicate that it is connected and idle. At boot, the setup
-access point and captive portal are available for Wi-Fi configuration and
-remain available after the board connects to the configured Wi-Fi network
-(AP+STA mode). The board self-updates its firmware from this repo's
-`releases/` folder; during an update, all seven count LEDs flash every 250 ms
-and the Inning matrix displays `UD`.
+Manual-only ESP32-S3 baseball scoreboard with three MAX7219 8×8 matrices
+(Away score, Inning, Home score) and seven discrete count LEDs (3 balls,
+2 strikes, 2 outs). The board does not retrieve game or team data from an
+online service: update the scoreboard from the Manual Controls page.
 
-Forked from the [MLBScoreboard](https://github.com/ubiconet/mlb_scoreboard)
-project (v2.60) with the TFT panel and everything that existed only to feed
-it removed: boot/OTA/setup screens, the linescore/waiting renderers, the
-news ticker, the at-bat result card, standings, and the team/boot logo
-assets. The firmware-update "do not turn off" state is shown on the Inning
-matrix while the count LEDs flash.
+## Manual controls
 
-The repo is still a **sport scoreboard template**: the generic framework
-(`src/common/` + `src/main.cpp`) is sport-agnostic, and everything MLB
-lives in `src/sports/mlb/`. See *Starting a new sport* below.
+The setup page links to **Manual Controls** and **Display Test**. The manual
+page adjusts the home and away scores, inning, top/bottom half, and ball,
+strike, and out counts. **Reset Count** clears only the count LEDs;
+**Reset All** restores a 0–0 score, top of the first, and an empty count.
+Scoreboard state is saved in nonvolatile storage and restored after reboot.
+Manual count LEDs always show the saved game count, independent of Wi-Fi
+connectivity.
 
-## Architecture
+## Setup and connectivity
 
-```
-┌─────────────────────────── core 1 (Arduino loop) ──────────────────────┐
-│ main.cpp (generic shell)      sports/mlb/mlb_app.cpp + mlb_renderer   │
-│  OTA indicator / NTP sync ──▶ WAITING↔LIVE state machine,            │
-│                               score matrices + count LEDs            │
-│                               │ takes POD snapshots                   │
-└───────────────────────────────┼────────────────────────────────────────┘
-                                │ SnapshotChannel<T> (lock-free, gen ctr)
-┌────────────────────────── core 0 (FreeRTOS) ───────────────────────────┐
-│ network_service (Wi-Fi AP/portal, P2)   mlb_data_task (feeds, P1)     │
-│ ota_update (self-update via TLS)         mlb_client → http_fetch      │
-└────────────────────────────────────────────────────────────────────────┘
-```
+At boot, the board starts its setup access point and captive portal. Configure
+Wi-Fi on the setup page; the access point and portal remain available after
+the board connects to the configured network. The portal also provides
+firmware update controls and a per-pixel/per-LED display test.
 
-Source layout and conventions: see `AGENTS.md` §1. Build/deploy: `AGENTS.md`
-§2. Released binaries + `manifest.json` live in [`releases/`](releases/) —
-devices self-update from them after boot.
+During a firmware update, all seven count LEDs flash at 250 ms intervals and
+the center matrix displays `UD`.
 
-## Building
+## Hardware
+
+| Output | Connection |
+|---|---|
+| MAX7219 matrices (Away, center, Home) | DIN=GPIO14, CLK=GPIO8, CS=GPIO16 |
+| Ball LEDs 1–3 | GPIO7, GPIO6, GPIO5 |
+| Strike LEDs 1–2 | GPIO4, GPIO3 |
+| Out LEDs 1–2 | GPIO2, GPIO1 |
+
+## Build
 
 ```powershell
-& 'C:\Users\Steve\.platformio\penv\Scripts\platformio.exe' run --environment esp32-s3-devkitc-1
+& 'C:\Users\Steve\.platformio\penv\Scripts\platformio.exe' run `
+    --environment esp32-s3-devkitc-1
 ```
 
-Hardware notes (pins, heap/TLS constraints) are in `docs/` and `AGENTS.md`.
-
-## Starting a new sport from this template
-
-The framework (`src/main.cpp` + `src/common/`) never names a sport. A sport
-is a folder under `src/sports/` that implements the `sport::` contract
-(`src/common/app/sport_api.h`) and provides `sport_config.h`. Checklist:
-
-1. **Copy the repo** (new GitHub repo per sport keeps OTA streams separate).
-2. **Copy `src/sports/mlb` → `src/sports/<sport>`** and rewrite the sport:
-   - `sport_config.h` — pins, branding (AP SSID, hostname, portal title),
-     feed poll cadences.
-   - `mlb_teams.*` — the league's team table `{id, abbrev, label}`.
-   - `mlb_snapshot.h` — your live-game POD structs (MLB's carries runs,
-     balls/strikes/outs, inning state; hockey might carry period, shots,
-     power play…).
-   - `mlb_client.*` — feed endpoints + JSON filters (build on
-     `common/comms/http_fetcher`; keep feeds on plain HTTP, payloads small).
-   - `mlb_data_task.cpp` — poll cadence + parse-to-snapshot publishing.
-   - `mlb_app.cpp` / `mlb_renderer.cpp` — your state machine and LED output.
-3. **Point the env at it** in `platformio.ini`: change `+<sports/mlb/>`
-   to `+<sports/<sport>/>` in `build_src_filter` and `-Isrc/sports/mlb`
-   to `-Isrc/sports/<sport>` in `build_flags`, then delete the old folder.
-4. **Repo identity**: set `OTA_MANIFEST_URL` / `OTA_LATEST_BIN_URL` in
-   `src/config.h`, and `RAW_BASE` + `LATEST_FILE` in
-   `tools/release_deploy.py`, to the new repo; bump `FIRMWARE_VERSION` to
-   `v1.0`.
-5. Build, USB-flash, walk through the setup portal, and run a live-game
-   session against your feed.
-
-Notes for the port: NVS keys (`ssid`, `team1..3`, `show_clock`) are shared
-by design so a re-purposed board keeps its Wi-Fi; team ids are league-local,
-so clear/re-pick teams in the portal after re-flashing a board.
+The OTA upload environment is `esp32-s3-devkitc-1-ota`. A release build is
+created with `pio run --environment esp32-s3-devkitc-1 --target deploy`.
+The deploy target reads `FIRMWARE_VERSION` from `src/config.h`, creates
+archived/latest binaries and `releases/manifest.json`, then pushes the release
+artifacts to this repository.
