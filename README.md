@@ -6,8 +6,8 @@ team is live, the matrices show the away/home scores and the LEDs count
 balls/strikes/outs; otherwise the matrices show the local time as an idle
 clock. Both out LEDs indicate that the board is offline; all three ball LEDs
 indicate that it is connected and idle. At boot, the setup access point and
-captive portal are available for Wi-Fi configuration; the access point turns
-off after the board connects to the configured Wi-Fi network. The board
+captive portal are available for Wi-Fi configuration and remain available
+after the board connects to the configured Wi-Fi network (AP+STA mode). The board
 self-updates its firmware from this repo's `releases/` folder; during an
 update, all seven count LEDs flash every 250 ms and the Home matrix displays
 `UD`.

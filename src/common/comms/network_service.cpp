@@ -212,17 +212,6 @@ bool ensureSetupAccessPoint() {
   return true;
 }
 
-void stopPortalInfrastructure() {
-  if (dnsRunning) {
-    dnsServer.stop();
-    dnsRunning = false;
-  }
-  if (apUp) {
-    WiFi.softAPdisconnect(true);
-    apUp = false;
-  }
-}
-
 bool probeInternet() {
   HTTPClient http;
   http.setConnectTimeout(3000);
@@ -268,7 +257,8 @@ void enterOnline() {
     savedPassword = pendingPassword;
     hasPending = false;
   }
-  stopPortalInfrastructure();
+  // AP+STA mode is intentional: keep the setup network and captive portal
+  // reachable even after station mode joins the user's Wi-Fi.
   startArduinoOTA();
   requestSetupRedraw(SETUP_ONLINE_PORTAL, WiFi.localIP());
   Serial.printf("[NET] Online: ip=%s rssi=%d gateway=%s\n",
@@ -436,9 +426,14 @@ body{margin:0;background:#061b46;color:#fff;font:16px system-ui,sans-serif}
 main{max-width:440px;margin:5vh auto;padding:24px;background:#0b2b62;border:2px solid #dfe9ff;border-radius:8px}
 h1{margin-top:0;font-size:24px}label{display:block;margin:14px 0 4px;font-weight:600}input,select{box-sizing:border-box;width:100%;padding:10px;border:0;border-radius:4px;font-size:15px}
 button{margin-top:20px;width:100%;padding:12px;background:#f5c400;border:0;border-radius:4px;font-weight:700;font-size:16px;color:#000;cursor:pointer}.hint{color:#c5d3ee;font-size:14px;line-height:1.4}
+.network-status{padding:10px 12px;border-radius:5px;font-weight:700}
+.network-status.online{background:#164d37;color:#a8f0c6}
+.network-status.connecting{background:#594718;color:#ffe39a}
+.network-status.provisioning{background:#54252c;color:#ffc0c7}
 hr{border:0;border-top:1px solid #1c4587;margin:20px 0}
 </style></head><body><main><h1>@@NAME@@ Setup</h1>
-<p class="hint">Configure Wi-Fi connection and select your favorite teams in order of priority.</p>
+<p class="hint">Configure Wi-Fi connection and select your favorite teams in order of priority. The setup access point remains available after the board joins your Wi-Fi.</p>
+<p id="networkStatus" class="network-status connecting" role="status" aria-live="polite">Checking network connection…</p>
 <form method="post" action="/save">
 <label for="network">Nearby Wi-Fi Networks</label>
 <select id="network" onchange="ssid.value=this.value"><option value="">Enter network manually</option>)html";
@@ -481,6 +476,14 @@ hr{border:0;border-top:1px solid #1c4587;margin:20px 0}
 <p><a style="color:#f5c400" href="/update">Upload a firmware file manually</a></p>
 <script>
 var otaWaiting=false;
+function refreshNetworkStatus(){fetch('/status').then(function(r){if(!r.ok)throw new Error('status unavailable');return r.json()}).then(function(s){var e=document.getElementById('networkStatus');
+e.className='network-status '+s.state;
+if(s.state==='online')e.textContent='Connected to Wi-Fi';
+else if(s.state==='connecting')e.textContent='Connecting to Wi-Fi…';
+else e.textContent='Not connected to Wi-Fi';
+}).catch(function(){var e=document.getElementById('networkStatus');e.className='network-status provisioning';e.textContent='Unable to check Wi-Fi connection'});
+}
+refreshNetworkStatus();setInterval(refreshNetworkStatus,3000);
 function otaCheck(){otaWaiting=true;document.getElementById('otaStatus').textContent='Checking...';fetch('/ota/check',{method:'POST'})}
 setInterval(function(){fetch('/ota/status').then(function(r){return r.json()}).then(function(s){var e=document.getElementById('otaStatus');
 if(s.stage==='DOWNLOADING'){otaWaiting=false;e.textContent='Downloading update '+s.progress+'% - watch the Home matrix and count LEDs; do not power off.'}
@@ -497,7 +500,8 @@ else if(otaWaiting&&s.checked&&s.ok){otaWaiting=false;e.textContent='No update a
 
 void serveStatus() {
   markPortalActivity();
-  const char* name = state == ONLINE ? "online" : (state == CONNECTING ? "connecting" : "provisioning");
+  const char* name = isOnline() ? "online" :
+      ((state == CONNECTING || state == ONLINE) ? "connecting" : "provisioning");
   server.send(200, "application/json", String("{\"state\":\"") + name + "\"}");
 }
 
