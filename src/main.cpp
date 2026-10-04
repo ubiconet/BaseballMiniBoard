@@ -12,11 +12,31 @@
 // Serial.
 
 #include <Arduino.h>
+#include <esp_system.h>
+
 #include "config.h"
 #include "common/app/sport_api.h"
 #include "common/comms/network_service.h"
 #include "common/ui/display_test.h"
 #include "common/ui/ota_indicator.h"
+
+namespace {
+const char* resetReasonName(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_POWERON: return "power-on";
+    case ESP_RST_EXT: return "external";
+    case ESP_RST_SW: return "software";
+    case ESP_RST_PANIC: return "panic";
+    case ESP_RST_INT_WDT: return "interrupt-watchdog";
+    case ESP_RST_TASK_WDT: return "task-watchdog";
+    case ESP_RST_WDT: return "watchdog";
+    case ESP_RST_DEEPSLEEP: return "deep-sleep";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_SDIO: return "sdio";
+    default: return "unknown";
+  }
+}
+}  // namespace
 
 void setup() {
   Serial.begin(SERIAL_BAUD_RATE);
@@ -25,6 +45,11 @@ void setup() {
   while (!Serial && (millis() - start < 3000)) {
     delay(10);
   }
+
+  const esp_reset_reason_t resetReason = esp_reset_reason();
+  Serial.printf("[BOOT] reset_reason=%s (%d)\n",
+                resetReasonName(resetReason),
+                static_cast<int>(resetReason));
 
   // Sport bring-up: hardware init with the sport's pins and boot tests
   // (the count-LED sweep is this build's boot sign).

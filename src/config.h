@@ -24,7 +24,7 @@
 // release binary, so the definition must stay here. There is no boot splash
 // to draw it on — confirm the running version via the Serial boot banner
 // ([BOOT] FW=...) or the setup portal's Firmware Update panel.
-static const char* FIRMWARE_VERSION = "v2.0";
+static const char* FIRMWARE_VERSION = "v2.1";
 
 // ---- Firmware self-update endpoints ----------------------------------------
 // `pio run -t deploy` writes the binary + manifest to releases/ in this
