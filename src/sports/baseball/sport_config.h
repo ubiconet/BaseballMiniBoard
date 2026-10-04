@@ -5,9 +5,9 @@
 // Baseball MiniBoard hardware profile.
 
 // Three cascaded MAX7219 8x8 matrices.
-static const int MAX7219_DIN_PIN = 14;
-static const int MAX7219_CLK_PIN = 8;
-static const int MAX7219_CS_PIN = 16;
+static const int MAX7219_DIN_PIN = 11;
+static const int MAX7219_CLK_PIN = 9;
+static const int MAX7219_CS_PIN = 10;
 
 // Discrete count LED pin assignments.
 static const int OUT_2_PIN = 1;
