@@ -117,28 +117,6 @@ void setMatrixBit(uint8_t rows[8], int r, int c, uint8_t value) {
   }
 }
 
-// Physical mounting correction: home matrix is installed upside-down.
-void rotateMatrix180(uint8_t rows[8]) {
-  uint8_t result[8] = {0};
-  for (int r = 0; r < 8; r++) {
-    for (int c = 0; c < 8; c++) {
-      setMatrixBit(result, r, c, getMatrixBit(rows, 7 - r, 7 - c));
-    }
-  }
-  memcpy(rows, result, 8);
-}
-
-// Physical mounting correction: away matrix is installed rotated 90 degrees clockwise.
-void rotateMatrix90Ccw(uint8_t rows[8]) {
-  uint8_t result[8] = {0};
-  for (int r = 0; r < 8; r++) {
-    for (int c = 0; c < 8; c++) {
-      setMatrixBit(result, r, c, getMatrixBit(rows, c, 7 - r));
-    }
-  }
-  memcpy(rows, result, 8);
-}
-
 // Convert integer score (0-99) into 8 row bytes for an 8x8 matrix. A negative
 // score (MAX7219_SCORE_BLANK) leaves the matrix dark.
 void scoreToMatrixRows(int score, uint8_t rows[8]) {
@@ -177,8 +155,6 @@ void writeMatrixRows(const uint8_t awayRows[8],
   memcpy(awayOutput, awayRows, sizeof(awayOutput));
   memcpy(centerOutput, centerRows, sizeof(centerOutput));
   memcpy(homeOutput, homeRows, sizeof(homeOutput));
-  rotateMatrix90Ccw(awayOutput);
-  rotateMatrix180(homeOutput);
   for (uint8_t row = 0; row < 8; row++) {
     uint8_t reg = MAX7219_REG_DIGIT0 + row;
     max7219Send(reg, awayOutput[row], reg, centerOutput[row],
@@ -322,8 +298,6 @@ void runMax7219BootTest() {
     awayRows[row] = (LETTER_A_5X7[row] & 0x1F) << 1;
     centerRows[row] = (FONT_5X7[2][row] & 0x1F) << 1;
   }
-  rotateMatrix180(homeRows);
-  rotateMatrix90Ccw(awayRows);
 
   for (uint8_t row = 0; row < 8; row++) {
     uint8_t reg = MAX7219_REG_DIGIT0 + row;

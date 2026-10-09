@@ -13,6 +13,7 @@ struct ManualGameState {
   uint8_t balls;
   uint8_t strikes;
   uint8_t outs;
+  uint8_t gameLogic;  // 1 = Ball/Strike/Out buttons follow baseball rules
 };
 
 void initializeManualGameState();
